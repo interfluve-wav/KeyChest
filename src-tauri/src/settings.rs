@@ -18,6 +18,8 @@ pub struct Settings {
     pub confirm_deletions: bool,
     #[serde(default = "default_true")]
     pub biometric_unlock: bool,
+    #[serde(default)]
+    pub reveal_on_hover: bool,
 }
 
 fn default_theme() -> String {

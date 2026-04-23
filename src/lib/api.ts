@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Vault, VaultData, ImportedKey, Settings } from './types';
+import type { Vault, VaultData, ImportedKey, Settings, ProxyCredential, ProxyRule, ProxyBinding, AuditEntry, ProxyStatus } from './types';
 
 // Vault management
 export const vaultList = (): Promise<Vault[]> => invoke('vault_list');
@@ -123,3 +123,31 @@ export const pgpDeleteKey = (vaultId: string, keyId: string): Promise<void> =>
   invoke('pgp_delete_key', { vaultId, keyId });
 export const pgpListKeys = (vaultId: string): Promise<PgpKeyMetadata[]> =>
   invoke('pgp_list_keys', { vaultId });
+
+// Agent Chest proxy commands
+export const proxyStart = (proxyPort?: number, mgmtPort?: number): Promise<ProxyStatus> =>
+  invoke('proxy_start', { proxyPort, mgmtPort });
+export const proxyStop = (): Promise<void> =>
+  invoke('proxy_stop');
+export const proxyGetStatus = (mgmtPort?: number): Promise<ProxyStatus> =>
+  invoke('proxy_status', { mgmtPort });
+export const proxyListCredentials = (mgmtPort?: number): Promise<ProxyCredential[]> =>
+  invoke('proxy_list_credentials', { mgmtPort });
+export const proxyAddCredential = (credential: ProxyCredential, mgmtPort?: number): Promise<ProxyCredential> =>
+  invoke('proxy_add_credential', { mgmtPort, credential });
+export const proxyDeleteCredential = (id: string, mgmtPort?: number): Promise<void> =>
+  invoke('proxy_delete_credential', { id, mgmtPort });
+export const proxyListRules = (mgmtPort?: number): Promise<ProxyRule[]> =>
+  invoke('proxy_list_rules', { mgmtPort });
+export const proxyAddRule = (rule: ProxyRule, mgmtPort?: number): Promise<ProxyRule> =>
+  invoke('proxy_add_rule', { mgmtPort, rule });
+export const proxyDeleteRule = (id: string, mgmtPort?: number): Promise<void> =>
+  invoke('proxy_delete_rule', { id, mgmtPort });
+export const proxyListBindings = (mgmtPort?: number): Promise<ProxyBinding[]> =>
+  invoke('proxy_list_bindings', { mgmtPort });
+export const proxyAddBinding = (vaultId: string, credentialIds: string[], ruleIds: string[], mgmtPort?: number): Promise<ProxyBinding> =>
+  invoke('proxy_add_binding', { vaultId, credentialIds, ruleIds, mgmtPort });
+export const proxyDeleteBinding = (id: string, mgmtPort?: number): Promise<void> =>
+  invoke('proxy_delete_binding', { id, mgmtPort });
+export const proxyAuditLog = (limit?: number, offset?: number, mgmtPort?: number): Promise<AuditEntry[]> =>
+  invoke('proxy_audit_log', { limit, offset, mgmtPort });

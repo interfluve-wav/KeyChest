@@ -3,13 +3,14 @@ import {
   Lock, Plus, Copy, Eye, EyeOff, Trash2,
   Key as KeyIcon, Globe, Terminal, Sparkles,
   Check, Search, Fingerprint, Download, Upload,
-  Settings, X, Shield, Star
+  Settings, X, Shield, Star, Server
 } from 'lucide-react'
 import { useVaultStore } from '../lib/store'
 import { vaultSave, aesEncrypt, sshGenerateKey, sshImportKeys, biometricAvailable, pgpGenerateKey, pgpImportKey } from '../lib/api'
 import type { SshKey, ApiKey, ImportedKey, PgpKey } from '../lib/types'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { ErrorBoundary } from './ErrorBoundary'
+import { ProxyManager } from './ProxyManager'
 
 // ── Toast System ──────────────────────────────────────────────────────────────
 
@@ -64,8 +65,8 @@ function ToastContainer() {
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 
 export function VaultDashboard({ onOpenSettings }: { onOpenSettings?: () => void }) {
-  const { currentVault, vaultData, encryptionKey, lock, setVaultData, touchActivity, autoLockMinutes, togglePinSsh, togglePinApi, togglePinPgp } = useVaultStore()
-  const [activeTab, setActiveTab] = useState<'ssh' | 'api' | 'pgp'>('ssh')
+  const { currentVault, vaultData, encryptionKey, lock, setVaultData, touchActivity, autoLockMinutes, settings, togglePinSsh, togglePinApi, togglePinPgp } = useVaultStore()
+  const [activeTab, setActiveTab] = useState<'ssh' | 'api' | 'pgp' | 'proxy'>('ssh')
   const [showAddModal, setShowAddModal] = useState(false)
   const [showImportModal, setShowImportModal] = useState(false)
   const [showImportApiModal, setShowImportApiModal] = useState(false)
@@ -135,6 +136,10 @@ export function VaultDashboard({ onOpenSettings }: { onOpenSettings?: () => void
       if (mod && e.key === '3') {
         e.preventDefault()
         setActiveTab('pgp')
+      }
+      if (mod && e.key === '4') {
+        e.preventDefault()
+        setActiveTab('proxy')
       }
       if (e.key === 'Escape') {
         setShowAddModal(false)
@@ -435,6 +440,17 @@ export function VaultDashboard({ onOpenSettings }: { onOpenSettings?: () => void
             <Shield className="w-4 h-4" />
             PGP Keys ({vaultData.pgp_keys?.length || 0})
           </button>
+          <button
+            onClick={() => setActiveTab('proxy')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+              activeTab === 'proxy'
+                ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/30 dark:text-emerald-400'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800/50'
+            }`}
+          >
+            <Server className="w-4 h-4" />
+            Proxy
+          </button>
           <div className="flex-1" />
           {activeTab === 'ssh' && (
             <button
@@ -490,6 +506,7 @@ export function VaultDashboard({ onOpenSettings }: { onOpenSettings?: () => void
                   onCopyPublic={() => copyToClipboard(key.public_key, key.id + '-pub')}
                   onDelete={() => deleteSshKey(key.id)}
                   onTogglePin={() => togglePinSsh(key.id)}
+                  revealOnHover={settings.reveal_on_hover}
                 />
               ))
             )}
@@ -538,6 +555,11 @@ export function VaultDashboard({ onOpenSettings }: { onOpenSettings?: () => void
               ))
             )}
           </div>
+        )}
+
+        {/* Agent Chest Proxy */}
+        {activeTab === 'proxy' && (
+          <ProxyManager />
         )}
       </main>
 
@@ -597,7 +619,7 @@ const EmptyState = memo(function EmptyState({ icon: Icon, message }: { icon: any
 })
 
 const SshKeyRow = memo(function SshKeyRow({
-  sshKey, revealed, copied, onToggleReveal, onCopy, onCopyPublic, onDelete, onTogglePin
+  sshKey, revealed, copied, onToggleReveal, onCopy, onCopyPublic, onDelete, onTogglePin, revealOnHover
 }: {
   sshKey: SshKey
   revealed: boolean
@@ -607,9 +629,20 @@ const SshKeyRow = memo(function SshKeyRow({
   onCopyPublic: () => void
   onDelete: () => void
   onTogglePin: () => void
+  revealOnHover: boolean
 }) {
+  const [isHovered, setIsHovered] = useState(false)
+
+  // Show partial last 8 chars when hovered and reveal-on-hover is enabled (but not fully revealed)
+  const showPartial = revealOnHover && isHovered && !revealed && !!sshKey.private_key
+  const partialKey = showPartial && sshKey.private_key ? sshKey.private_key.slice(-8) : null
+
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-5 hover:border-slate-300 transition-colors group dark:bg-slate-900/50 dark:border-slate-800 dark:hover:border-slate-700">
+    <div
+      className="bg-white border border-slate-200 rounded-xl p-5 hover:border-slate-300 transition-colors group dark:bg-slate-900/50 dark:border-slate-800 dark:hover:border-slate-700"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
       <div className="flex items-start justify-between mb-3">
         <div className="flex-1 min-w-0">
           <h3 className="font-semibold text-slate-900 truncate dark:text-white">{sshKey.name}</h3>
@@ -631,24 +664,31 @@ const SshKeyRow = memo(function SshKeyRow({
         </div>
       </div>
       {sshKey.comment && <p className="text-sm text-slate-600 dark:text-slate-400 mb-3">{sshKey.comment}</p>}
-      {revealed && sshKey.private_key && (
+      {sshKey.private_key && (
         <div className="bg-slate-100 rounded-lg p-4 font-mono text-xs text-slate-700 overflow-x-auto max-h-48 overflow-y-auto dark:bg-slate-950">
-          <pre>{sshKey.private_key}</pre>
+          <pre>
+            {revealed
+              ? sshKey.private_key
+              : partialKey
+                ? `...${partialKey}`
+                : '••••••••'}
+          </pre>
         </div>
       )}
       {sshKey.public_key && (
-        <div className="mt-3 p-3 bg-slate-100 rounded-lg group/pub dark:bg-slate-800/50">
-          <div className="flex items-center justify-between mb-1">
-            <p className="text-xs text-slate-600 dark:text-slate-500">Public Key</p>
+        <div className="mt-3 p-3 bg-slate-100 rounded-lg dark:bg-slate-800/50">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs text-slate-600 dark:text-slate-500 font-medium">Public Key</p>
             <button
               onClick={onCopyPublic}
-              className="p-1 text-slate-500 hover:text-slate-700 opacity-0 group-hover/pub:opacity-100 transition-all dark:hover:text-white"
+              className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-sm dark:bg-slate-800 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white"
               title="Copy public key"
             >
               <Copy className="w-3 h-3" />
+              Copy Public
             </button>
           </div>
-          <code className="text-xs text-slate-700 font-mono break-all dark:text-slate-300">{sshKey.public_key}</code>
+          <code className="text-xs text-slate-700 font-mono break-all block dark:text-slate-300">{sshKey.public_key}</code>
         </div>
       )}
     </div>
@@ -707,7 +747,7 @@ const ApiKeyRow = memo(function ApiKeyRow({
 function AddKeyModal({
   tab, onClose, onSaveSsh, onSaveApi, onSavePgp
 }: {
-  tab: 'ssh' | 'api' | 'pgp'
+  tab: 'ssh' | 'api' | 'pgp' | 'proxy'
   onClose: () => void
   onSaveSsh: (key: Omit<SshKey, 'id' | 'created'>) => void
   onSaveApi: (key: Omit<ApiKey, 'id' | 'created'>) => void
@@ -729,10 +769,10 @@ function AddKeyModal({
     if (!name) return
     setIsGenerating(true)
     try {
-      const result = await sshGenerateKey(name, keyType, comment || `${name}@ssh-vault`)
+      const result = await sshGenerateKey(name, keyType, comment || `${name}@keynest`)
       setPublicKey(result.public_key)
       setKeyData(result.private_key)
-      setComment(comment || `${name}@ssh-vault`)
+      setComment(comment || `${name}@keynest`)
       toast('SSH key generated', 'success')
     } catch (err) {
       toast('Failed to generate SSH key', 'error')

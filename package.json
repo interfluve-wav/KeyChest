@@ -11,7 +11,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
-    "test:coverage": "vitest --coverage"
+    "test:coverage": "vitest --coverage",
+    "test:e2e": "bash scripts/run-e2e.sh",
+    "test:e2e:ui": "bash scripts/run-e2e.sh --ui",
+    "test:e2e:debug": "bash scripts/run-e2e.sh --debug"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.2.0",
@@ -25,6 +28,8 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
+    "@playwright/experimental-ct-react": "^1.59.1",
+    "@playwright/test": "^1.59.1",
     "@tauri-apps/cli": "^2.2.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",

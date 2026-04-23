@@ -4,10 +4,26 @@
 //! complex OpenPGP API exploration and gives us accurate metadata parsing for free.
 
 use serde::{Deserialize, Serialize};
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use tauri_plugin_store::StoreExt;
 
 use crate::models::{PgpKey, VaultData, VaultMeta};
+
+/// Return the absolute path to the gpg binary.
+/// Check common locations since PATH may not be available in the app sandbox.
+fn gpg_path() -> &'static str {
+    // Try Homebrew on Apple Silicon first
+    if std::path::Path::new("/opt/homebrew/bin/gpg").exists() {
+        return "/opt/homebrew/bin/gpg";
+    }
+    // Try Homebrew on Intel Mac
+    if std::path::Path::new("/usr/local/bin/gpg").exists() {
+        return "/usr/local/bin/gpg";
+    }
+    // Fall back to PATH lookup
+    "gpg"
+}
 
 /// Metadata returned after importing a key
 #[derive(Debug, Serialize, Deserialize)]
@@ -73,7 +89,7 @@ fn gpg_inspect(armored: &str) -> Result<GpgInspectResult, String> {
         .map_err(|e| format!("Failed to write temp key file: {}", e))?;
 
     // Run gpg --show-keys to get structured metadata
-    let output = Command::new("gpg")
+    let output = Command::new(gpg_path())
         .args(["--show-keys", armored_path.to_str().unwrap()])
         .output()
         .map_err(|e| format!("Failed to run gpg: {}. Is GPG installed?", e))?;
@@ -336,20 +352,32 @@ pub fn pgp_generate_key(
     vault_id: String,
     name: String,
     email: String,
-    passphrase: String,
+    _passphrase: String,
 ) -> Result<PgpKey, String> {
     use crate::crypto::generate_uuid;
 
-    // Generate temp dir
-    let temp_dir = std::env::temp_dir().join(format!("pgp_gen_{}", generate_uuid()));
-    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp dir: {}", e))?;
-    let pub_path = temp_dir.join("pub.asc");
-    let _priv_path = temp_dir.join("sec.asc");
-    let batch_path = temp_dir.join("batch.txt");
+    eprintln!(
+        "[PGP] Starting key generation: name={}, email={}",
+        name, email
+    );
+    eprintln!("[PGP] gpg_path = {}", gpg_path());
 
-    // Write gpg batch config
+    // Use /tmp directly — macOS temp_dir (/var/folders/...) paths are too long
+    // and exceed the Unix domain socket path limit, causing gpg-agent failures.
+    let temp_dir = std::path::PathBuf::from("/tmp").join(format!("pgp_{}", generate_uuid()));
+    eprintln!("[PGP] temp_dir = {:?}", temp_dir);
+    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp dir: {}", e))?;
+    // Secure the temp dir with 0700 perms
+    #[cfg(unix)]
+    std::fs::set_permissions(&temp_dir, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| format!("Failed to set temp dir permissions: {}", e))?;
+
+    // Build the gpg batch file
+    // Use %no-protection so the secret key doesn't require a passphrase.
+    // This is safe because the temp homedir has restricted permissions (0700),
+    // and the vault's AES-256-GCM encryption protects the exported key at rest.
     let batch = format!(
-        "%echo Generating PGP key...\n\
+        "%echo Generating PGP key for {} <{}>\n\
          Key-Type: RSA\n\
          Key-Length: 4096\n\
          Subkey-Type: RSA\n\
@@ -357,109 +385,91 @@ pub fn pgp_generate_key(
          Name-Real: {}\n\
          Name-Email: {}\n\
          Expire-Date: 0\n\
-         {}\n\
+         %no-protection\n\
          %commit\n\
-         %echo Key generated\n",
-        name,
-        email,
-        if passphrase.is_empty() {
-            String::new()
-        } else {
-            format!("Passphrase: {}\n", passphrase)
-        },
+         %echo Done\n",
+        name, email, name, email,
     );
+
+    let batch_path = temp_dir.join("batch.txt");
     std::fs::write(&batch_path, &batch).map_err(|e| format!("Failed to write batch: {}", e))?;
+    eprintln!("[PGP] batch written to {:?}", batch_path);
+    eprintln!("[PGP] batch content:\n{}", batch);
 
-    // Run gpg --generate-key with batch file
-    let mut cmd = Command::new("gpg");
-    cmd.arg("--batch")
+    // Run gpg --gen-key in batch mode
+    let output = Command::new(gpg_path())
+        .args(["--batch", "--homedir", temp_dir.to_str().unwrap()])
         .arg("--gen-key")
-        .arg("--homedir")
-        .arg(&temp_dir)
-        .arg("--output")
-        .arg(&pub_path)
-        .arg("--export")
-        .arg(&email);
-    let _ = cmd.output(); // Ignore export output
-
-    // Actually generate the secret key with another batch run
-    let _output = Command::new("gpg")
-        .args([
-            "--batch",
-            "--gen-key",
-            "--homedir",
-            &temp_dir.to_string_lossy(),
-        ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn gpg: {}", e))?;
-
-    // Try with --quick-genererate-key first (simpler)
-    let quick_output = Command::new("gpg")
-        .arg("--batch")
-        .arg("--homedir")
-        .arg(temp_dir.to_string_lossy().as_ref())
-        .arg("--quick-generate-key")
-        .arg(&email)
-        .arg("rsa4096")
-        .arg("sign")
-        .arg("never")
-        .arg("--passphrase")
-        .arg(&passphrase)
+        .arg(batch_path.to_str().unwrap())
         .output()
-        .map_err(|e| format!("Failed to run gpg: {}. Is GPG installed?", e))?;
+        .map_err(|e| format!("Failed to spawn gpg: {}. Is GPG installed?", e))?;
 
-    if !quick_output.status.success() {
-        let stderr = String::from_utf8_lossy(&quick_output.stderr);
-        // Clean up temp dir even on failure
+    eprintln!(
+        "[PGP] gen exit = {}, stdout={}, stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout).trim(),
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
         let _ = std::fs::remove_dir_all(&temp_dir);
-        return Err(format!("gpg key generation failed: {}", stderr.trim()));
+        return Err(format!(
+            "gpg key generation failed (exit {}): {}",
+            output.status,
+            if stderr.trim().is_empty() {
+                stdout.trim()
+            } else {
+                stderr.trim()
+            }
+        ));
     }
 
-    // Export the generated keys
-    let pub_out = Command::new("gpg")
-        .arg("--batch")
-        .arg("--homedir")
-        .arg(temp_dir.to_string_lossy().as_ref())
-        .arg("--armor")
-        .arg("--export")
-        .arg(&email)
+    // Export public key
+    let pub_out = Command::new(gpg_path())
+        .args(["--batch", "--homedir", temp_dir.to_str().unwrap()])
+        .args(["--armor", "--export", &email])
         .output()
         .map_err(|e| format!("Failed to export public key: {}", e))?;
 
-    let priv_out = Command::new("gpg")
-        .arg("--batch")
-        .arg("--homedir")
-        .arg(temp_dir.to_string_lossy().as_ref())
-        .arg("--armor")
-        .arg("--export-secret-keys")
-        .arg(&email)
+    eprintln!(
+        "[PGP] pub export exit = {}, size = {}",
+        pub_out.status,
+        pub_out.stdout.len()
+    );
+    let public_key = String::from_utf8(pub_out.stdout)
+        .map_err(|e| format!("UTF-8 error on public key: {}", e))?;
+
+    // Export secret key
+    let priv_out = Command::new(gpg_path())
+        .args(["--batch", "--homedir", temp_dir.to_str().unwrap()])
+        .args(["--armor", "--export-secret-keys", &email])
         .output()
         .map_err(|e| format!("Failed to export secret key: {}", e))?;
 
-    let public_key =
-        String::from_utf8(pub_out.stdout).map_err(|e| format!("UTF-8 error: {}", e))?;
-    let private_key =
-        String::from_utf8(priv_out.stdout).map_err(|e| format!("UTF-8 error: {}", e))?;
+    eprintln!(
+        "[PGP] priv export exit = {}, size = {}",
+        priv_out.status,
+        priv_out.stdout.len()
+    );
+    let private_key = String::from_utf8(priv_out.stdout)
+        .map_err(|e| format!("UTF-8 error on secret key: {}", e))?;
 
-    // Parse metadata from the public key
-    let metadata = parse_gpg_key_info(&public_key)?;
-
-    // Get key_id and fingerprint from gpg --list-keys
-    let list_out = Command::new("gpg")
-        .arg("--batch")
-        .arg("--homedir")
-        .arg(temp_dir.to_string_lossy().as_ref())
-        .arg("--list-keys")
-        .arg("--with-colons")
-        .arg(&email)
+    // Get fingerprint via --list-keys --with-colons
+    let list_out = Command::new(gpg_path())
+        .args(["--batch", "--homedir", temp_dir.to_str().unwrap()])
+        .args(["--list-keys", "--with-colons", &email])
         .output()
         .map_err(|e| format!("Failed to list keys: {}", e))?;
 
     let (fingerprint, key_id) =
         parse_fingerprint_from_list(&String::from_utf8_lossy(&list_out.stdout));
+    eprintln!("[PGP] fingerprint={}, key_id={}", fingerprint, key_id);
+
+    // Determine algorithm and bit length from armored public key
+    let (algorithm, bit_length, created) =
+        parse_gpg_key_info(&public_key).unwrap_or_else(|_| ("RSA".to_string(), 4096, chrono_now()));
 
     // Save to vault
     let store = app
@@ -476,9 +486,9 @@ pub fn pgp_generate_key(
         name,
         fingerprint,
         key_id,
-        algorithm: metadata.0,
-        bit_length: metadata.1,
-        created: metadata.2,
+        algorithm,
+        bit_length,
+        created,
         user_ids: vec![email],
         public_key: if public_key.trim().is_empty() {
             None
@@ -505,28 +515,34 @@ pub fn pgp_generate_key(
     Ok(pgp_key)
 }
 
+fn chrono_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(1704067200);
+    let days = secs / 86400;
+    let year = 1970 + days / 365;
+    let remaining_days = days % 365;
+    let month = remaining_days / 30 + 1;
+    let day = remaining_days % 30 + 1;
+    format!("{:04}-{:02}-{:02}", year, month, day)
+}
+
 /// Parse algorithm, bit_length, and creation date from armored public key
 fn parse_gpg_key_info(armored: &str) -> Result<(String, u32, String), String> {
-    let created = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| {
-            let secs = d.as_secs();
-            let days = secs / 86400;
-            let year = 1970 + days / 365;
-            let remaining_days = days % 365;
-            format!(
-                "{:04}-{:02}-{:02}",
-                year,
-                (remaining_days / 30) + 1,
-                (remaining_days % 30) + 1
-            )
-        })
-        .unwrap_or_else(|_| "2024-01-01".to_string());
+    if armored.trim().is_empty() {
+        return Err("Empty armored key".to_string());
+    }
 
     let algo = if armored.contains("Ed25519") {
         "Ed25519".to_string()
+    } else if armored.contains("cv25519") {
+        "Curve25519".to_string()
     } else if armored.contains("ECDSA") {
         "ECDSA".to_string()
+    } else if armored.contains("ECDH") {
+        "ECDH".to_string()
     } else if armored.contains("ECC") {
         "ECC".to_string()
     } else {
@@ -543,6 +559,8 @@ fn parse_gpg_key_info(armored: &str) -> Result<(String, u32, String), String> {
         4096
     };
 
+    let created = chrono_now();
+
     Ok((algo, bit_len, created))
 }
 
@@ -553,7 +571,15 @@ fn parse_fingerprint_from_list(output: &str) -> (String, String) {
             let fields: Vec<&str> = line.split(':').collect();
             if fields.len() >= 10 {
                 let fp = fields[9].to_string();
-                let key_id = fp.chars().skip(fp.len().saturating_sub(16)).collect();
+                // key_id is last 16 hex chars of fingerprint
+                let key_id = fp
+                    .chars()
+                    .rev()
+                    .take(16)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect();
                 return (fp, key_id);
             }
         }

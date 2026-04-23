@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import {
   ArrowLeft, Moon, Sun, Clock, Key, Download, Upload,
-  Palette, Shield, Trash2, AlertTriangle, FileJson, Fingerprint
+  Palette, Shield, Trash2, AlertTriangle, FileJson, Fingerprint,
+  Eye
 } from 'lucide-react'
 import { useVaultStore } from '../lib/store'
 import { getSettings, setSettings, vaultExport, biometricAvailable, biometricDeleteKey } from '../lib/api'
@@ -227,6 +228,36 @@ export function Settings({ onBack }: SettingsProps) {
                   </button>
                 </div>
               )}
+
+              {/* Reveal on Hover */}
+              <div className="pt-4 border-t border-slate-200 dark:border-slate-700">
+                <label className="flex items-center justify-between cursor-pointer">
+                  <div className="flex items-center gap-2">
+                    <Eye className="w-4 h-4 text-slate-500" />
+                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Reveal private keys on hover</span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      const updated = { ...localSettings, reveal_on_hover: !localSettings.reveal_on_hover }
+                      saveSettings(updated)
+                    }}
+                    className={`relative w-11 h-6 rounded-full transition-colors ${
+                      localSettings.reveal_on_hover ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
+                    }`}
+                    role="switch"
+                    aria-checked={localSettings.reveal_on_hover}
+                  >
+                    <span
+                      className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                        localSettings.reveal_on_hover ? 'translate-x-5' : ''
+                      }`}
+                    />
+                  </button>
+                </label>
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-500">
+                  When enabled, hovering over a private key shows the last 8 characters. Click to reveal full key.
+                </p>
+              </div>
             </div>
           </section>
 

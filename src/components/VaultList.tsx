@@ -68,8 +68,8 @@ export function VaultList({ onSelect, onCreate }: Props) {
               <Shield className="w-6 h-6 text-emerald-400" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-slate-900 dark:text-white">SSH Vault</h1>
-              <p className="text-sm text-slate-600 dark:text-slate-400">Secure key management</p>
+              <h1 className="text-2xl font-bold text-slate-900 dark:text-white">KeyNest</h1>
+              <p className="text-sm text-slate-600 dark:text-slate-400">Your keys, secured.</p>
             </div>
           </div>
           <button

@@ -67,14 +67,19 @@ npm run tauri build      # Build the Tauri app bundle
 - Settings (get/set/reset)
 - Biometric (Touch ID availability, store/retrieve/delete key, unlock)
 
+**Agent Chest proxy (Go binary + Rust bridge):**
+- `proxy.rs` — spawns Go binary, bridges management API via reqwest; 13 Tauri commands
+- `agent-chest-proxy/` — standalone Go HTTP/HTTPS credential proxy with management API
+
 **Components (`src/components/`):**
 - `App.tsx` — main router (vault list → unlock → dashboard)
 - `VaultList.tsx` — vault selection/create entry screen
 - `CreateVault.tsx` — new vault creation flow (password + key derivation)
 - `UnlockVault.tsx` — password or Touch ID unlock (tries Argon2id first, falls back to PBKDF2)
-- `VaultDashboard.tsx` — main UI with tabs: SSH Keys, API Keys, Notes, PGP Keys
+- `VaultDashboard.tsx` — main UI with tabs: SSH Keys, API Keys, Notes, PGP Keys, Proxy
 - `Settings.tsx` — auto-lock, theme, Touch ID clear, vault export/import
-- `QuickPicker.tsx` — global hotkey overlay (`Cmd+Shift+K`) for fast key search/copy
+- `QuickPicker.tsx` — global hotkey overlay
+- `ProxyManager.tsx` — Agent Chest proxy management (credentials, rules, bindings, audit) (`Cmd+Shift+K`) for fast key search/copy
 
 **Styling:** Tailwind CSS via `tailwind.config.js`; dark theme default.
 
@@ -91,6 +96,7 @@ npm run tauri build      # Build the Tauri app bundle
 - `git.rs` — Git integration: `git_is_repo`, `git_get_repo_config`, `git_set_ssh_key` (writes to `.git/config`), `git_remove_ssh_key`, `git_setup_deploy_key` (generates deploy key and configures repo)
 - `settings.rs` — `settings_get`/`set`/`reset` using Tauri's `store` plugin (persisted in app storage)
 - `biometric.rs` — Touch ID via `objc2-local-authentication`; stores encryption key in Keychain with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, `biometric_available`, `biometric_store_key`, `biometric_retrieve_key`, `biometric_unlock` (full flow)
+- `proxy.rs` — Agent Chest proxy management; spawns Go binary, bridges management API via reqwest; 13 Tauri commands for credentials, rules, bindings, audit
 
 **Data flow (unlock):**
 1. Frontend reads vault metadata (salt + ciphertext) via `vault_load`
@@ -99,6 +105,19 @@ npm run tauri build      # Build the Tauri app bundle
 4. For Touch ID: `biometric_retrieve_key` gets stored key from Keychain (no password needed)
 
 **Vault storage format:** Single JSON file per vault (e.g., `~/.ssh-vault/{uuid}.json`) containing serialized `VaultMeta`. The encrypted `VaultData` is the `ciphertext` field (base64-encoded AES-GCM).
+
+### Agent Chest Proxy (`agent-chest-proxy/`)
+
+Standalone Go binary that the Rust backend spawns as a child process. Provides:
+- HTTP/HTTPS proxy on `:8080` with credential injection (Bearer, API key header, Basic auth)
+- Management API on `:8081` with REST endpoints for credentials, rules, bindings, audit
+- Firewall-like access rules (allow/deny by host pattern, path pattern, method)
+- Multi-vault RBAC bindings to scope agent blast radius
+- Audit trail with file persistence and subscriber model
+- HTTPS CONNECT upgrade to forward-proxy when credentials match
+
+**Build:** `cd agent-chest-proxy && go build -o ../src-tauri/ ./cmd/agent-chest-proxy/`
+**Binary location:** `src-tauri/agent-chest-proxy` (Rust looks for this path)
 
 ## Testing
 

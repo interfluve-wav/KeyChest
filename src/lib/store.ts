@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Vault, VaultData, Note, Settings } from './types'
+import type { Vault, VaultData, Note, Settings, ProxyCredential, ProxyRule, ProxyBinding, AuditEntry, ProxyStatus } from './types'
 
 interface VaultState {
   currentVault: Vault | null
@@ -41,12 +41,25 @@ interface VaultState {
   togglePinSsh: (id: string) => void
   togglePinApi: (id: string) => void
   togglePinPgp: (id: string) => void
+
+  // Agent Chest proxy state
+  proxyStatus: ProxyStatus | null
+  proxyCredentials: ProxyCredential[]
+  proxyRules: ProxyRule[]
+  proxyBindings: ProxyBinding[]
+  proxyAuditLog: AuditEntry[]
+  setProxyStatus: (status: ProxyStatus | null) => void
+  setProxyCredentials: (creds: ProxyCredential[]) => void
+  setProxyRules: (rules: ProxyRule[]) => void
+  setProxyBindings: (bindings: ProxyBinding[]) => void
+  setProxyAuditLog: (entries: AuditEntry[]) => void
 }
 
 const defaultSettings: Settings = {
   auto_lock_minutes: 5,
   theme: 'dark',
   default_ssh_key_type: 'ed25519',
+  reveal_on_hover: false,
 }
 
 export const useVaultStore = create<VaultState>((set, get) => ({
@@ -59,6 +72,12 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   settings: defaultSettings,
   agentKeys: [],
   isAgentLoading: false,
+
+  proxyStatus: null,
+  proxyCredentials: [],
+  proxyRules: [],
+  proxyBindings: [],
+  proxyAuditLog: [],
 
   unlock: (vault, data, key) => set({
     currentVault: vault,
@@ -233,4 +252,10 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       lastActivity: Date.now(),
     })
   },
+
+  setProxyStatus: (status) => set({ proxyStatus: status }),
+  setProxyCredentials: (creds) => set({ proxyCredentials: creds }),
+  setProxyRules: (rules) => set({ proxyRules: rules }),
+  setProxyBindings: (bindings) => set({ proxyBindings: bindings }),
+  setProxyAuditLog: (entries) => set({ proxyAuditLog: entries }),
 }))

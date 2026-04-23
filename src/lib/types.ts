@@ -68,6 +68,7 @@ export interface Settings {
   auto_lock_minutes: number
   theme: string
   default_ssh_key_type: string
+  reveal_on_hover: boolean
 }
 
 export interface ImportedKey {
@@ -77,6 +78,61 @@ export interface ImportedKey {
   private_key: string | null
   fingerprint: string
   comment: string
+}
+
+// Agent Chest proxy types
+export interface ProxyCredential {
+  id: string
+  name: string
+  vault_id: string
+  target_host: string
+  target_prefix: string
+  auth_type: 'bearer' | 'api_key_header' | 'basic_auth'
+  header_name: string
+  header_value: string
+  encrypted_key?: string
+  created_at: string
+}
+
+export interface ProxyRule {
+  id: string
+  vault_id: string
+  name: string
+  host_match: string
+  path_match: string
+  methods: string[]
+  action: 'allow' | 'deny'
+  created_at: string
+}
+
+export interface ProxyBinding {
+  id: string
+  vault_id: string
+  credential_ids: string[]
+  rule_ids: string[]
+  created_at: string
+}
+
+export interface AuditEntry {
+  timestamp: string
+  agent_id: string
+  vault_id: string
+  method: string
+  target: string
+  path: string
+  action: string
+  status_code: number
+  credential_id: string
+  rule: string
+  source_ip: string
+  user_agent: string
+  duration_ms: number
+}
+
+export interface ProxyStatus {
+  running: boolean
+  proxy_port: number
+  mgmt_port: number
 }
 
 export function emptyVaultData(): VaultData {
