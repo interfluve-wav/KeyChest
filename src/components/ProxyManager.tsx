@@ -15,6 +15,7 @@ import {
   proxyRuleTest, proxyListPolicyTemplates, proxyApplyPolicyTemplate
 } from '../lib/api'
 import type { ProxyCredential, ProxyRule, ProxyBinding, ProxyProposal, ProxyAgent, ProxyInvite, ProxyRedeemInviteResponse, AuditEntry, DiscoverService, ProxyRuleTestResponse, ProxyPolicyTemplate } from '../lib/types'
+import type { ProxyStatus } from '../lib/types'
 import { ErrorBoundary } from './ErrorBoundary'
 import { toast } from './VaultDashboard'
 
@@ -24,6 +25,10 @@ function formatError(err: unknown): string {
   if (typeof err === 'string') return err
   if (err && typeof err === 'object' && 'toString' in err) return String(err)
   return 'Unexpected error'
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function formatRemaining(expiresAt: string, nowMs: number): string {
@@ -85,10 +90,28 @@ export function ProxyManager() {
   const handleStart = async () => {
     setLoading(true)
     try {
-      const status = await proxyStart(8080, 8081)
+      let status: ProxyStatus
+      try {
+        status = await proxyStart(8080, 8081)
+      } catch (e: any) {
+        const msg = formatError(e)
+        // Common: stale running proxy (app restart) or raced stop/start.
+        if (msg.includes('already running')) {
+          try {
+            await proxyStop()
+            await sleep(300)
+            status = await proxyStart(8080, 8081)
+          } catch (e2: any) {
+            throw new Error(`${msg} (auto-restart failed: ${formatError(e2)})`)
+          }
+        } else {
+          throw e
+        }
+      }
+
       setProxyStatus(status)
       await refreshAll()
-      toast('Proxy started', 'success')
+      toast(`Proxy started (ports ${status.proxy_port}/${status.mgmt_port})`, 'success')
     } catch (e: any) {
       console.error('Failed to start proxy:', e)
       toast(`Failed to start proxy: ${formatError(e)}`, 'error')
@@ -101,6 +124,13 @@ export function ProxyManager() {
     setLoading(true)
     try {
       await proxyStop()
+      // Wait for status to flip before clearing the UI, otherwise stop/start can race.
+      for (let i = 0; i < 10; i++) {
+        const s = await proxyGetStatus().catch(() => null)
+        if (!s?.running) break
+        await sleep(150)
+      }
+
       setProxyStatus(null)
       setProxyCredentials([])
       setProxyRules([])
