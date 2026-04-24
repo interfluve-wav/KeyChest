@@ -3,6 +3,9 @@ export interface Vault {
   name: string
   salt: string
   ciphertext: string
+  version?: number
+  kdf?: 'argon2id' | 'pbkdf2' | null
+  wrapped_dek?: string | null
   created: string
 }
 
@@ -133,6 +136,7 @@ export interface ProxyAgent {
   name: string
   status: 'active' | 'revoked'
   token?: string
+  expires_at?: string
   created_at: string
   updated_at: string
 }
@@ -185,6 +189,29 @@ export interface DiscoverResponse {
   vault: string
   services: DiscoverService[]
   available_credential_keys: string[]
+}
+
+export interface ProxyRuleTestRequest {
+  vault_id: string
+  host: string
+  path: string
+  method: string
+}
+
+export interface ProxyRuleTestResponse {
+  allow: boolean
+  reason: string
+  matched_rule?: ProxyRule
+  host: string
+  path: string
+  method: string
+}
+
+export interface ProxyPolicyTemplate {
+  id: string
+  name: string
+  description: string
+  rules: ProxyRule[]
 }
 
 export function emptyVaultData(): VaultData {

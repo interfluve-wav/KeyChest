@@ -36,6 +36,9 @@ fn main() {
             keynest_tauri_lib::crypto::aes_encrypt,
             keynest_tauri_lib::crypto::aes_decrypt,
             keynest_tauri_lib::crypto::generate_salt_cmd,
+            keynest_tauri_lib::crypto::generate_data_key_cmd,
+            keynest_tauri_lib::crypto::wrap_data_key_cmd,
+            keynest_tauri_lib::crypto::unwrap_data_key_cmd,
             keynest_tauri_lib::crypto::generate_uuid,
             // Vault commands
             keynest_tauri_lib::models::vault_list,
@@ -43,6 +46,7 @@ fn main() {
             keynest_tauri_lib::models::vault_load,
             keynest_tauri_lib::models::vault_delete,
             keynest_tauri_lib::models::vault_check_integrity,
+            keynest_tauri_lib::models::vault_change_password,
             keynest_tauri_lib::models::vault_export_with_data,
             keynest_tauri_lib::models::vault_import,
             // SSH commands
@@ -105,6 +109,9 @@ fn main() {
             keynest_tauri_lib::proxy::proxy_list_invites,
             keynest_tauri_lib::proxy::proxy_create_invite,
             keynest_tauri_lib::proxy::proxy_redeem_invite,
+            keynest_tauri_lib::proxy::proxy_rule_test,
+            keynest_tauri_lib::proxy::proxy_list_policy_templates,
+            keynest_tauri_lib::proxy::proxy_apply_policy_template,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

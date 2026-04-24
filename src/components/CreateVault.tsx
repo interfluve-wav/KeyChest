@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Shield, Loader2, ArrowLeft } from 'lucide-react'
-import { vaultSave, generateSalt, generateUuid, pbkdf2KeyDerive, aesEncrypt, aesDecrypt } from '../lib/api'
+import { vaultSave, generateSalt, generateUuid, argon2KeyDerive, generateDataKey, wrapDataKey, aesEncrypt, aesDecrypt } from '../lib/api'
 import type { Vault } from '../lib/types'
 import { useVaultStore } from '../lib/store'
 import { ErrorBoundary } from './ErrorBoundary'
@@ -40,15 +40,17 @@ export function CreateVault({ onBack, onCreated }: Props) {
     try {
       const id = await generateUuid()
       const salt = await generateSalt()
-      const key = await pbkdf2KeyDerive(passphrase, salt)
+      const kek = await argon2KeyDerive(passphrase, salt)
+      const dek = await generateDataKey()
+      const wrappedDek = await wrapDataKey(dek, kek)
 
       // Pre-verify: encrypt with the derived key, then immediately decrypt.
       // If this fails, the vault cannot be recovered. Catch it BEFORE saving.
       const emptyData = JSON.stringify({ keys: [], api_keys: [], notes: [], pgp_keys: [] })
       let ciphertext: string
       try {
-        ciphertext = await aesEncrypt(key, emptyData)
-        const verified = await aesDecrypt(key, ciphertext)
+        ciphertext = await aesEncrypt(dek, emptyData)
+        const verified = await aesDecrypt(dek, ciphertext)
         if (verified !== emptyData) throw new Error('Pre-verify roundtrip mismatch')
       } catch (e) {
         setError('Cryptographic error — please try a different passphrase')
@@ -62,11 +64,14 @@ export function CreateVault({ onBack, onCreated }: Props) {
         name: name.trim(),
         salt,
         ciphertext,
+        version: 2,
+        kdf: 'argon2id',
+        wrapped_dek: wrappedDek,
         created: new Date().toISOString(),
       }
 
       await vaultSave(vault)
-      unlock(vault, { keys: [], api_keys: [], notes: [], pgp_keys: [] }, key)
+      unlock(vault, { keys: [], api_keys: [], notes: [], pgp_keys: [] }, dek)
       onCreated(vault)
     } catch (err) {
       setError('Failed to create vault')

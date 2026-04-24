@@ -1,3 +1,4 @@
+use crate::crypto::{argon2_key_derive, wrap_data_key_cmd};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
@@ -10,7 +11,17 @@ pub struct VaultMeta {
     pub name: String,
     pub salt: String,
     pub ciphertext: String,
+    #[serde(default = "default_vault_meta_version")]
+    pub version: u32,
+    #[serde(default)]
+    pub kdf: Option<String>,
+    #[serde(default)]
+    pub wrapped_dek: Option<String>,
     pub created: String,
+}
+
+fn default_vault_meta_version() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +120,40 @@ pub struct PgpKey {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VaultListResult {
     pub vaults: Vec<VaultMeta>,
+}
+
+pub async fn rewrap_vault_password(
+    vault: &VaultMeta,
+    data_key: &str,
+    new_password: &str,
+) -> Result<VaultMeta, String> {
+    if vault.wrapped_dek.is_none() {
+        return Err("Vault is not using wrapped key format yet".to_string());
+    }
+
+    let salt = vault.salt.clone();
+    let kek = argon2_key_derive(new_password.to_string(), salt).await?;
+    let wrapped_dek = wrap_data_key_cmd(data_key.to_string(), kek).await?;
+
+    Ok(VaultMeta {
+        id: vault.id.clone(),
+        name: vault.name.clone(),
+        salt: vault.salt.clone(),
+        ciphertext: vault.ciphertext.clone(),
+        version: 2,
+        kdf: Some("argon2id".to_string()),
+        wrapped_dek: Some(wrapped_dek),
+        created: vault.created.clone(),
+    })
+}
+
+#[tauri::command]
+pub async fn vault_change_password(
+    vault: VaultMeta,
+    data_key: String,
+    new_password: String,
+) -> Result<VaultMeta, String> {
+    rewrap_vault_password(&vault, &data_key, &new_password).await
 }
 
 fn get_store(app: &AppHandle) -> Result<Arc<Store<Wry>>, String> {
@@ -437,6 +482,9 @@ mod tests {
             name: "Test Vault".to_string(),
             salt: "saltbase64==".to_string(),
             ciphertext: "ciphertextbase64==".to_string(),
+            version: 1,
+            kdf: None,
+            wrapped_dek: None,
             created: "2026-04-23T00:00:00Z".to_string(),
         };
         let data = VaultData::default();
@@ -449,5 +497,35 @@ mod tests {
         assert_eq!(export.meta.id, decoded.meta.id);
         assert_eq!(export.meta.name, decoded.meta.name);
         assert_eq!(export.data.version, decoded.data.version);
+    }
+
+    #[test]
+    fn test_rewrap_vault_password_changes_wrapper_not_ciphertext() {
+        let salt = crate::crypto::generate_salt();
+        let meta = VaultMeta {
+            id: "vault-2".to_string(),
+            name: "Wrapped Vault".to_string(),
+            salt,
+            ciphertext: "ciphertextbase64==".to_string(),
+            version: 2,
+            kdf: Some("argon2id".to_string()),
+            wrapped_dek: Some("wrapped-one".to_string()),
+            created: "2026-04-23T00:00:00Z".to_string(),
+        };
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let updated = runtime
+            .block_on(rewrap_vault_password(
+                &meta,
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                "new-password",
+            ))
+            .expect("rewrap should succeed");
+
+        assert_eq!(updated.ciphertext, meta.ciphertext);
+        assert_eq!(updated.id, meta.id);
+        assert_eq!(updated.version, 2);
+        assert_ne!(updated.wrapped_dek, meta.wrapped_dek);
+        assert_eq!(updated.kdf.as_deref(), Some("argon2id"));
     }
 }

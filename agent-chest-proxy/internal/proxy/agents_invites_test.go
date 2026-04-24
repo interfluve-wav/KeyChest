@@ -35,7 +35,8 @@ func TestInviteRedeemAndAgentTokenLifecycle(t *testing.T) {
 
 	// Redeem invite into an agent + token
 	redeemReq := httptest.NewRequest(http.MethodPost, "/v1/invites/"+code+"/redeem", bytes.NewBufferString(`{
-		"name":"Codex Worker A"
+		"name":"Codex Worker A",
+		"ttl":"15m"
 	}`))
 	redeemReq.Header.Set("Content-Type", "application/json")
 	redeemRec := httptest.NewRecorder()
@@ -78,7 +79,8 @@ func TestInviteRedeemAndAgentTokenLifecycle(t *testing.T) {
 	}
 
 	// Rotate token
-	rotateReq := httptest.NewRequest(http.MethodPost, "/v1/agents/"+agentID+"/rotate-token", nil)
+	rotateReq := httptest.NewRequest(http.MethodPost, "/v1/agents/"+agentID+"/rotate-token", bytes.NewBufferString(`{"ttl":"1h"}`))
+	rotateReq.Header.Set("Content-Type", "application/json")
 	rotateRec := httptest.NewRecorder()
 	h.ServeHTTP(rotateRec, rotateReq)
 	if rotateRec.Code != http.StatusOK {
@@ -92,6 +94,9 @@ func TestInviteRedeemAndAgentTokenLifecycle(t *testing.T) {
 	newToken, _ := rotateResp["token"].(string)
 	if newToken == "" || newToken == initialToken {
 		t.Fatalf("expected new token different from initial token")
+	}
+	if expiresAt, _ := rotateResp["expires_at"].(string); expiresAt == "" {
+		t.Fatalf("expected rotate response to include expires_at")
 	}
 
 	// Revoke agent

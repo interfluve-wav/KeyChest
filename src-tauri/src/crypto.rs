@@ -79,6 +79,12 @@ pub fn generate_salt() -> String {
     BASE64.encode(salt)
 }
 
+pub fn generate_data_key() -> Result<String, String> {
+    let mut key = [0u8; KEY_LEN];
+    OsRng.fill_bytes(&mut key);
+    Ok(BASE64.encode(key))
+}
+
 /// Derive a key using Argon2id (new vaults / new unlock only).
 fn derive_key_argon2(password: &str, salt_b64: &str) -> Result<SecretKey, String> {
     let salt_bytes = BASE64
@@ -210,6 +216,17 @@ pub fn decrypt(encoded: &str, key: &[u8; KEY_LEN]) -> Result<String, String> {
         })
 }
 
+pub fn wrap_data_key(data_key_b64: &str, kek: &[u8; KEY_LEN]) -> Result<String, String> {
+    let data_key = SecretKey::from_base64(data_key_b64)?;
+    encrypt(&data_key.to_base64(), kek)
+}
+
+pub fn unwrap_data_key(wrapped_key: &str, kek: &[u8; KEY_LEN]) -> Result<String, String> {
+    let data_key_b64 = decrypt(wrapped_key, kek)?;
+    let _ = SecretKey::from_base64(&data_key_b64)?;
+    Ok(data_key_b64)
+}
+
 // ── Thin Tauri command wrappers ─────────────────────────────────────────────────
 
 /// Encrypt plaintext with the given key using AES-256-GCM.
@@ -239,6 +256,31 @@ pub async fn aes_decrypt(encrypted: String, key: String) -> Result<String, Strin
 #[tauri::command]
 pub fn generate_salt_cmd() -> String {
     generate_salt()
+}
+
+#[tauri::command]
+pub fn generate_data_key_cmd() -> Result<String, String> {
+    generate_data_key()
+}
+
+#[tauri::command]
+pub async fn wrap_data_key_cmd(data_key: String, key: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let kek = SecretKey::from_base64(&key)?;
+        wrap_data_key(&data_key, kek.as_bytes())
+    })
+    .await
+    .map_err(|e| format!("Wrap data key task panicked: {}", e))?
+}
+
+#[tauri::command]
+pub async fn unwrap_data_key_cmd(wrapped_key: String, key: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let kek = SecretKey::from_base64(&key)?;
+        unwrap_data_key(&wrapped_key, kek.as_bytes())
+    })
+    .await
+    .map_err(|e| format!("Unwrap data key task panicked: {}", e))?
 }
 
 // ── Utilities ───────────────────────────────────────────────────────────────────
@@ -393,5 +435,37 @@ mod tests {
             ct_bytes.len(),
             min_size
         );
+    }
+
+    #[test]
+    fn test_generate_data_key_returns_32_bytes() {
+        let key_b64 = generate_data_key().expect("data key generation failed");
+        let key = SecretKey::from_base64(&key_b64).expect("data key decode failed");
+        assert_eq!(key.as_bytes().len(), KEY_LEN);
+    }
+
+    #[test]
+    fn test_wrap_unwrap_data_key_roundtrip() {
+        let salt = generate_salt();
+        let kek = derive_key_argon2(TEST_PASSWORD, &salt).expect("kek derivation failed");
+        let dek = generate_data_key().expect("data key generation failed");
+
+        let wrapped = wrap_data_key(&dek, kek.as_bytes()).expect("wrap should succeed");
+        let unwrapped = unwrap_data_key(&wrapped, kek.as_bytes()).expect("unwrap should succeed");
+
+        assert_eq!(dek, unwrapped);
+    }
+
+    #[test]
+    fn test_unwrap_data_key_fails_with_wrong_key() {
+        let salt = generate_salt();
+        let kek = derive_key_argon2(TEST_PASSWORD, &salt).expect("kek derivation failed");
+        let wrong_kek = derive_key_argon2("wrong-password", &salt).expect("wrong kek derivation failed");
+        let dek = generate_data_key().expect("data key generation failed");
+
+        let wrapped = wrap_data_key(&dek, kek.as_bytes()).expect("wrap should succeed");
+        let result = unwrap_data_key(&wrapped, wrong_kek.as_bytes());
+
+        assert!(result.is_err());
     }
 }

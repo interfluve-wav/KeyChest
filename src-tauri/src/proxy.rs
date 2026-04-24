@@ -66,6 +66,8 @@ pub struct ProxyAgent {
     pub status: String,
     #[serde(default)]
     pub token: Option<String>,
+    #[serde(default)]
+    pub expires_at: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -244,7 +246,11 @@ pub async fn proxy_status(mgmt_port: Option<u16>) -> Result<ProxyStatus, String>
     }
 
     let client = reqwest::Client::new();
-    let resp = client.get(&url).timeout(std::time::Duration::from_secs(2)).send().await;
+    let resp = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await;
 
     match resp {
         Ok(r) if r.status().is_success() => Ok(ProxyStatus {
@@ -261,7 +267,9 @@ pub async fn proxy_status(mgmt_port: Option<u16>) -> Result<ProxyStatus, String>
 }
 
 #[tauri::command]
-pub async fn proxy_list_credentials(mgmt_port: Option<u16>) -> Result<Vec<ProxyCredential>, String> {
+pub async fn proxy_list_credentials(
+    mgmt_port: Option<u16>,
+) -> Result<Vec<ProxyCredential>, String> {
     let mgmt_port = mgmt_port.unwrap_or(8081);
     let url = format!("{}/api/v1/credentials", mgmt_base_url(mgmt_port));
     let client = reqwest::Client::new();
@@ -303,10 +311,7 @@ pub async fn proxy_add_credential(
 }
 
 #[tauri::command]
-pub async fn proxy_delete_credential(
-    mgmt_port: Option<u16>,
-    id: String,
-) -> Result<(), String> {
+pub async fn proxy_delete_credential(mgmt_port: Option<u16>, id: String) -> Result<(), String> {
     let mgmt_port = mgmt_port.unwrap_or(8081);
     let url = format!("{}/api/v1/credentials/{}", mgmt_base_url(mgmt_port), id);
     let client = reqwest::Client::new();
@@ -339,10 +344,7 @@ pub async fn proxy_list_rules(mgmt_port: Option<u16>) -> Result<Vec<ProxyRule>, 
 }
 
 #[tauri::command]
-pub async fn proxy_add_rule(
-    mgmt_port: Option<u16>,
-    rule: ProxyRule,
-) -> Result<ProxyRule, String> {
+pub async fn proxy_add_rule(mgmt_port: Option<u16>, rule: ProxyRule) -> Result<ProxyRule, String> {
     let mgmt_port = mgmt_port.unwrap_or(8081);
     let url = format!("{}/api/v1/rules", mgmt_base_url(mgmt_port));
     let client = reqwest::Client::new();
@@ -354,7 +356,10 @@ pub async fn proxy_add_rule(
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
 
-    let r: ProxyRule = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+    let r: ProxyRule = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))?;
     Ok(r)
 }
 
@@ -414,7 +419,10 @@ pub async fn proxy_add_binding(
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
 
-    let b: ProxyBinding = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+    let b: ProxyBinding = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))?;
     Ok(b)
 }
 
@@ -569,12 +577,17 @@ pub async fn proxy_list_agents(
 pub async fn proxy_rotate_agent_token(
     mgmt_port: Option<u16>,
     id: String,
+    ttl: Option<String>,
 ) -> Result<ProxyAgent, String> {
     let mgmt_port = mgmt_port.unwrap_or(8081);
     let url = format!("{}/v1/agents/{}/rotate-token", mgmt_base_url(mgmt_port), id);
     let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "ttl": ttl.unwrap_or_else(|| "1h".to_string())
+    });
     let resp = client
         .post(&url)
+        .json(&body)
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await
@@ -588,10 +601,7 @@ pub async fn proxy_rotate_agent_token(
 }
 
 #[tauri::command]
-pub async fn proxy_revoke_agent(
-    mgmt_port: Option<u16>,
-    id: String,
-) -> Result<ProxyAgent, String> {
+pub async fn proxy_revoke_agent(mgmt_port: Option<u16>, id: String) -> Result<ProxyAgent, String> {
     let mgmt_port = mgmt_port.unwrap_or(8081);
     let url = format!("{}/v1/agents/{}/revoke", mgmt_base_url(mgmt_port), id);
     let client = reqwest::Client::new();
@@ -669,11 +679,13 @@ pub async fn proxy_redeem_invite(
     mgmt_port: Option<u16>,
     code: String,
     name: Option<String>,
+    ttl: Option<String>,
 ) -> Result<ProxyRedeemInviteResponse, String> {
     let mgmt_port = mgmt_port.unwrap_or(8081);
     let url = format!("{}/v1/invites/{}/redeem", mgmt_base_url(mgmt_port), code);
     let body = serde_json::json!({
-        "name": name.unwrap_or_default()
+        "name": name.unwrap_or_default(),
+        "ttl": ttl.unwrap_or_else(|| "1h".to_string())
     });
     let client = reqwest::Client::new();
     let resp = client
@@ -721,6 +733,82 @@ pub async fn proxy_audit_log(
     Ok(entries)
 }
 
+#[tauri::command]
+pub async fn proxy_rule_test(
+    mgmt_port: Option<u16>,
+    request: ProxyRuleTestRequest,
+) -> Result<ProxyRuleTestResponse, String> {
+    let mgmt_port = mgmt_port.unwrap_or(8081);
+    let url = format!("{}/api/v1/rules/test", mgmt_base_url(mgmt_port));
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&request)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let outcome: ProxyRuleTestResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))?;
+    Ok(outcome)
+}
+
+#[tauri::command]
+pub async fn proxy_list_policy_templates(
+    mgmt_port: Option<u16>,
+) -> Result<Vec<ProxyPolicyTemplate>, String> {
+    let mgmt_port = mgmt_port.unwrap_or(8081);
+    let url = format!("{}/api/v1/policy-templates", mgmt_base_url(mgmt_port));
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let templates: Vec<ProxyPolicyTemplate> = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))?;
+    Ok(templates)
+}
+
+#[tauri::command]
+pub async fn proxy_apply_policy_template(
+    mgmt_port: Option<u16>,
+    vault_id: String,
+    template_id: String,
+) -> Result<Vec<ProxyRule>, String> {
+    let mgmt_port = mgmt_port.unwrap_or(8081);
+    let url = format!("{}/api/v1/policy-templates", mgmt_base_url(mgmt_port));
+    let body = serde_json::json!({
+        "vault_id": vault_id,
+        "template_id": template_id
+    });
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let payload: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))?;
+    let created = payload
+        .get("created")
+        .cloned()
+        .unwrap_or_else(|| serde_json::Value::Array(vec![]));
+    serde_json::from_value(created).map_err(|e| format!("Parse error: {}", e))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoverService {
     pub host: String,
@@ -732,6 +820,33 @@ pub struct DiscoverResponse {
     pub vault: String,
     pub services: Vec<DiscoverService>,
     pub available_credential_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyRuleTestRequest {
+    pub vault_id: String,
+    pub host: String,
+    pub path: String,
+    pub method: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyRuleTestResponse {
+    pub allow: bool,
+    pub reason: String,
+    #[serde(default)]
+    pub matched_rule: Option<ProxyRule>,
+    pub host: String,
+    pub path: String,
+    pub method: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyPolicyTemplate {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub rules: Vec<ProxyRule>,
 }
 
 #[tauri::command]

@@ -5,7 +5,17 @@ import {
   Eye
 } from 'lucide-react'
 import { useVaultStore } from '../lib/store'
-import { getSettings, setSettings, vaultExport, biometricAvailable, biometricDeleteKey } from '../lib/api'
+import {
+  argon2KeyDerive,
+  biometricAvailable,
+  biometricDeleteKey,
+  getSettings,
+  setSettings,
+  unwrapDataKey,
+  vaultChangePassword,
+  vaultExport,
+  vaultSave,
+} from '../lib/api'
 import type { Settings as SettingsType, VaultData } from '../lib/types'
 import { save } from '@tauri-apps/plugin-dialog'
 import { toast } from './VaultDashboard'
@@ -16,11 +26,25 @@ interface SettingsProps {
 }
 
 export function Settings({ onBack }: SettingsProps) {
-  const { settings, setSettings: updateStoreSettings, currentVault, vaultData, setVaultData } = useVaultStore()
+  const {
+    settings,
+    setSettings: updateStoreSettings,
+    currentVault,
+    vaultData,
+    setVaultData,
+    encryptionKey,
+    setCurrentVault,
+  } = useVaultStore()
   const [localSettings, setLocalSettings] = useState<SettingsType>(settings)
   const [showImportConfirm, setShowImportConfirm] = useState(false)
   const [pendingImport, setPendingImport] = useState<VaultData | null>(null)
   const [hasBiometric, setHasBiometric] = useState(false)
+  const [showChangePassword, setShowChangePassword] = useState(false)
+  const [currentPass, setCurrentPass] = useState('')
+  const [newPass, setNewPass] = useState('')
+  const [confirmPass, setConfirmPass] = useState('')
+  const [changePassError, setChangePassError] = useState('')
+  const [isChangingPass, setIsChangingPass] = useState(false)
 
   // Check biometric availability on mount
   useEffect(() => {
@@ -93,6 +117,53 @@ export function Settings({ onBack }: SettingsProps) {
       toast('Touch ID cleared. You\'ll need to enter your password next time.', 'success')
     } catch {
       toast('No Touch ID was set for this vault', 'info')
+    }
+  }
+
+  const canChangePassword =
+    Boolean(currentVault && encryptionKey && currentVault.wrapped_dek && (currentVault.version ?? 1) >= 2)
+
+  const handleChangePassword = async () => {
+    if (!currentVault || !encryptionKey) return
+    if (!currentVault.wrapped_dek) {
+      toast('This vault must be upgraded first. Unlock it with your passphrase once.', 'info')
+      return
+    }
+
+    if (newPass.length < 8) {
+      setChangePassError('New passphrase must be at least 8 characters')
+      return
+    }
+    if (newPass !== confirmPass) {
+      setChangePassError('New passphrases do not match')
+      return
+    }
+
+    setChangePassError('')
+    setIsChangingPass(true)
+    try {
+      const kek = await argon2KeyDerive(currentPass, currentVault.salt)
+      const unwrapped = await unwrapDataKey(currentVault.wrapped_dek, kek)
+      if (unwrapped !== encryptionKey) {
+        setChangePassError('Current passphrase is incorrect')
+        setIsChangingPass(false)
+        return
+      }
+
+      const updated = await vaultChangePassword(currentVault, encryptionKey, newPass)
+      await vaultSave(updated)
+      setCurrentVault(updated)
+
+      setShowChangePassword(false)
+      setCurrentPass('')
+      setNewPass('')
+      setConfirmPass('')
+      toast('Passphrase updated', 'success')
+    } catch (e) {
+      console.error('Failed to change passphrase:', e)
+      setChangePassError('Failed to change passphrase')
+    } finally {
+      setIsChangingPass(false)
     }
   }
 
@@ -224,6 +295,34 @@ export function Settings({ onBack }: SettingsProps) {
                     <div>
                       <p className="font-medium text-slate-900 dark:text-white">Clear Touch ID</p>
                       <p className="text-xs text-slate-600 dark:text-slate-500">Remove stored key for this vault</p>
+                    </div>
+                  </button>
+                </div>
+              )}
+
+              {/* Passphrase management */}
+              {currentVault && (
+                <div className="pt-4 border-t border-slate-200 dark:border-slate-700">
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
+                    <Key className="w-4 h-4 text-slate-500" />
+                    Passphrase
+                  </label>
+                  <button
+                    onClick={() => {
+                      if (!canChangePassword) {
+                        toast('Unlock this vault with your passphrase once to enable passphrase changes.', 'info')
+                        return
+                      }
+                      setShowChangePassword(true)
+                    }}
+                    className="w-full flex items-center gap-3 px-4 py-3 bg-slate-100 hover:bg-slate-200 rounded-xl transition-all text-left dark:bg-slate-800 dark:hover:bg-slate-700"
+                  >
+                    <Key className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                    <div>
+                      <p className="font-medium text-slate-900 dark:text-white">Change passphrase</p>
+                      <p className="text-xs text-slate-600 dark:text-slate-500">
+                        {canChangePassword ? 'Re-wraps your vault key (no re-encryption)' : 'Requires one passphrase unlock to upgrade'}
+                      </p>
                     </div>
                   </button>
                 </div>
@@ -407,6 +506,77 @@ export function Settings({ onBack }: SettingsProps) {
           </section>
         </div>
       </main>
+
+      {/* Change Passphrase Modal */}
+      {showChangePassword && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6">
+          <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl p-6 dark:bg-slate-900 dark:border-slate-800">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-1">Change passphrase</h3>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mb-4">
+              This re-wraps your vault data key. Your encrypted data stays unchanged.
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Current passphrase</label>
+                <input
+                  type="password"
+                  value={currentPass}
+                  onChange={(e) => setCurrentPass(e.target.value)}
+                  className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/50 transition-all dark:bg-slate-950 dark:border-slate-700 dark:text-white dark:placeholder-slate-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">New passphrase</label>
+                <input
+                  type="password"
+                  value={newPass}
+                  onChange={(e) => setNewPass(e.target.value)}
+                  className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/50 transition-all dark:bg-slate-950 dark:border-slate-700 dark:text-white dark:placeholder-slate-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Confirm new passphrase</label>
+                <input
+                  type="password"
+                  value={confirmPass}
+                  onChange={(e) => setConfirmPass(e.target.value)}
+                  className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/50 transition-all dark:bg-slate-950 dark:border-slate-700 dark:text-white dark:placeholder-slate-500"
+                />
+              </div>
+
+              {changePassError && (
+                <div className="text-red-600 text-sm bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-3 dark:text-red-400">
+                  {changePassError}
+                </div>
+              )}
+
+              <div className="pt-2 flex gap-3">
+                <button
+                  onClick={() => {
+                    setShowChangePassword(false)
+                    setChangePassError('')
+                    setCurrentPass('')
+                    setNewPass('')
+                    setConfirmPass('')
+                  }}
+                  className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 rounded-xl transition-all text-slate-900 font-medium dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-white"
+                  disabled={isChangingPass}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleChangePassword}
+                  className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 rounded-xl transition-all text-slate-950 font-semibold disabled:bg-slate-200 dark:disabled:bg-slate-700 disabled:text-slate-400 dark:disabled:text-slate-500"
+                  disabled={isChangingPass || !currentPass || !newPass || !confirmPass}
+                >
+                  {isChangingPass ? 'Updating...' : 'Update'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Import Confirm Modal */}
       {showImportConfirm && pendingImport && (

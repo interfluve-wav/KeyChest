@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -63,6 +64,85 @@ type DiscoverResponse struct {
 type DiscoverService struct {
 	Host        string `json:"host"`
 	Description string `json:"description"`
+}
+
+type RuleTestRequest struct {
+	VaultID string            `json:"vault_id"`
+	Host    string            `json:"host"`
+	Path    string            `json:"path"`
+	Method  string            `json:"method"`
+	Headers map[string]string `json:"headers"`
+}
+
+type RuleTestResponse struct {
+	Allow       bool        `json:"allow"`
+	Reason      string      `json:"reason"`
+	MatchedRule *rules.Rule `json:"matched_rule,omitempty"`
+	Host        string      `json:"host"`
+	Path        string      `json:"path"`
+	Method      string      `json:"method"`
+}
+
+type PolicyTemplate struct {
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Description string       `json:"description"`
+	Rules       []rules.Rule `json:"rules"`
+}
+
+func parseTokenTTL(raw string) (time.Duration, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "none":
+		return 0, true
+	case "15m":
+		return 15 * time.Minute, true
+	case "1h":
+		return time.Hour, true
+	case "24h":
+		return 24 * time.Hour, true
+	default:
+		return 0, false
+	}
+}
+
+func (p *Proxy) policyTemplates() []PolicyTemplate {
+	now := time.Now().UTC().Format(time.RFC3339)
+	return []PolicyTemplate{
+		{
+			ID:          "openai",
+			Name:        "OpenAI API",
+			Description: "Allow only OpenAI API traffic on common REST endpoints.",
+			Rules: []rules.Rule{
+				{ID: uuid.NewString(), Name: "OpenAI API allow", HostMatch: "api.openai.com", PathMatch: "/v1/*", Methods: []string{"GET", "POST"}, Action: rules.Allow, CreatedAt: now},
+			},
+		},
+		{
+			ID:          "github",
+			Name:        "GitHub API",
+			Description: "Allow GitHub API access for repos/issues/pulls operations.",
+			Rules: []rules.Rule{
+				{ID: uuid.NewString(), Name: "GitHub REST allow", HostMatch: "api.github.com", PathMatch: "/*", Methods: []string{"GET", "POST", "PUT", "PATCH", "DELETE"}, Action: rules.Allow, CreatedAt: now},
+				{ID: uuid.NewString(), Name: "GitHub upload allow", HostMatch: "uploads.github.com", PathMatch: "/*", Methods: []string{"POST"}, Action: rules.Allow, CreatedAt: now},
+			},
+		},
+		{
+			ID:          "stripe",
+			Name:        "Stripe API",
+			Description: "Allow Stripe API calls while blocking dashboard domains by omission.",
+			Rules: []rules.Rule{
+				{ID: uuid.NewString(), Name: "Stripe API allow", HostMatch: "api.stripe.com", PathMatch: "/v1/*", Methods: []string{"GET", "POST", "DELETE"}, Action: rules.Allow, CreatedAt: now},
+			},
+		},
+		{
+			ID:          "aws",
+			Name:        "AWS STS + S3",
+			Description: "Safe starter set for AWS token and object operations.",
+			Rules: []rules.Rule{
+				{ID: uuid.NewString(), Name: "AWS STS allow", HostMatch: "sts.amazonaws.com", PathMatch: "/*", Methods: []string{"GET", "POST"}, Action: rules.Allow, CreatedAt: now},
+				{ID: uuid.NewString(), Name: "AWS S3 allow", HostMatch: "*.s3.amazonaws.com", PathMatch: "/*", Methods: []string{"GET", "PUT", "POST", "DELETE"}, Action: rules.Allow, CreatedAt: now},
+			},
+		},
+	}
 }
 
 func scrubControlHeaders(h http.Header) {
@@ -676,11 +756,17 @@ func (p *Proxy) ManagementHandler() http.Handler {
 		code := parts[0]
 		var req struct {
 			Name string `json:"name"`
+			TTL  string `json:"ttl"`
 		}
 		if r.Body != nil {
 			_ = json.NewDecoder(r.Body).Decode(&req)
 		}
-		invite, agent, token, ok := p.agentMgr.RedeemInvite(code, req.Name)
+		ttl, ok := parseTokenTTL(req.TTL)
+		if !ok {
+			http.Error(w, "invalid ttl, allowed values: 15m, 1h, 24h, none", http.StatusBadRequest)
+			return
+		}
+		invite, agent, token, ok := p.agentMgr.RedeemInvite(code, req.Name, ttl)
 		if !ok {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
@@ -693,6 +779,7 @@ func (p *Proxy) ManagementHandler() http.Handler {
 				"vault_id":   agent.VaultID,
 				"name":       agent.Name,
 				"status":     agent.Status,
+				"expires_at": agent.ExpiresAt,
 				"created_at": agent.CreatedAt,
 				"updated_at": agent.UpdatedAt,
 			},
@@ -720,7 +807,18 @@ func (p *Proxy) ManagementHandler() http.Handler {
 		id, action := parts[0], parts[1]
 		switch action {
 		case "rotate-token":
-			agent, token, ok := p.agentMgr.RotateToken(id)
+			var req struct {
+				TTL string `json:"ttl"`
+			}
+			if r.Body != nil {
+				_ = json.NewDecoder(r.Body).Decode(&req)
+			}
+			ttl, ok := parseTokenTTL(req.TTL)
+			if !ok {
+				http.Error(w, "invalid ttl, allowed values: 15m, 1h, 24h, none", http.StatusBadRequest)
+				return
+			}
+			agent, token, ok := p.agentMgr.RotateToken(id, ttl)
 			if !ok {
 				http.Error(w, "not found", http.StatusNotFound)
 				return
@@ -731,6 +829,7 @@ func (p *Proxy) ManagementHandler() http.Handler {
 				"name":       agent.Name,
 				"status":     agent.Status,
 				"token":      token,
+				"expires_at": agent.ExpiresAt,
 				"created_at": agent.CreatedAt,
 				"updated_at": agent.UpdatedAt,
 			})
@@ -990,6 +1089,59 @@ func (p *Proxy) ManagementHandler() http.Handler {
 		}
 	})
 
+	mux.HandleFunc("/api/v1/rules/test", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req RuleTestRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		host := strings.TrimSpace(req.Host)
+		if host == "" {
+			http.Error(w, "host is required", http.StatusBadRequest)
+			return
+		}
+		method := strings.ToUpper(strings.TrimSpace(req.Method))
+		if method == "" {
+			method = http.MethodGet
+		}
+		path := strings.TrimSpace(req.Path)
+		if path == "" {
+			path = "/"
+		}
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+
+		allowed, reason := p.netGuard.Allowed(host)
+		if !allowed {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(RuleTestResponse{
+				Allow:  false,
+				Reason: "netguard: " + reason,
+				Host:   host,
+				Path:   path,
+				Method: method,
+			})
+			return
+		}
+
+		decision := p.ruleEngine.Evaluate(req.VaultID, host, path, method)
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(RuleTestResponse{
+			Allow:       decision.Allow,
+			Reason:      decision.Reason,
+			MatchedRule: decision.Rule,
+			Host:        host,
+			Path:        path,
+			Method:      method,
+		})
+	})
+
 	mux.HandleFunc("/api/v1/rules/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		id := strings.TrimPrefix(r.URL.Path, "/api/v1/rules/")
@@ -1028,6 +1180,63 @@ func (p *Proxy) ManagementHandler() http.Handler {
 		case http.MethodDelete:
 			p.rbacMgr.Unbind(id)
 			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	mux.HandleFunc("/api/v1/policy-templates", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			templates := p.policyTemplates()
+			sort.Slice(templates, func(i, j int) bool { return templates[i].Name < templates[j].Name })
+			_ = json.NewEncoder(w).Encode(templates)
+		case http.MethodPost:
+			var req struct {
+				VaultID    string `json:"vault_id"`
+				TemplateID string `json:"template_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid JSON", http.StatusBadRequest)
+				return
+			}
+			if strings.TrimSpace(req.TemplateID) == "" {
+				http.Error(w, "template_id is required", http.StatusBadRequest)
+				return
+			}
+
+			var selected *PolicyTemplate
+			for _, tpl := range p.policyTemplates() {
+				if tpl.ID == req.TemplateID {
+					tmp := tpl
+					selected = &tmp
+					break
+				}
+			}
+			if selected == nil {
+				http.Error(w, "template not found", http.StatusNotFound)
+				return
+			}
+
+			created := make([]rules.Rule, 0, len(selected.Rules))
+			for _, base := range selected.Rules {
+				rule := base
+				rule.ID = uuid.NewString()
+				rule.VaultID = req.VaultID
+				rule.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+				p.ruleEngine.Add(rule)
+				if req.VaultID != "" {
+					p.rbacMgr.AddRuleToVaultBindings(req.VaultID, rule.ID)
+				}
+				created = append(created, rule)
+			}
+
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"template_id": req.TemplateID,
+				"created":     created,
+			})
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}

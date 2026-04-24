@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   Shield, Play, Square, Plus, Trash2, RefreshCw,
   Server, Lock, Eye, EyeOff, Check, XCircle,
-  FileText, Key as KeyIcon, Filter, Link, Compass
+  FileText, Key as KeyIcon, Filter, Link, Compass, FlaskConical, BookTemplate, Sparkles
 } from 'lucide-react'
 import { useVaultStore } from '../lib/store'
 import {
@@ -11,18 +11,30 @@ import {
   proxyListRules, proxyAddRule, proxyDeleteRule,
   proxyListBindings, proxyAddBinding, proxyDeleteBinding,
   proxyAuditLog, proxyDiscover, proxyListProposals, proxyApproveProposal, proxyDenyProposal,
-  proxyListAgents, proxyRotateAgentToken, proxyRevokeAgent, proxyListInvites, proxyCreateInvite, proxyRedeemInvite
+  proxyListAgents, proxyRotateAgentTokenWithTtl, proxyRevokeAgent, proxyListInvites, proxyCreateInvite, proxyRedeemInviteWithTtl,
+  proxyRuleTest, proxyListPolicyTemplates, proxyApplyPolicyTemplate
 } from '../lib/api'
-import type { ProxyCredential, ProxyRule, ProxyBinding, ProxyProposal, ProxyAgent, ProxyInvite, ProxyRedeemInviteResponse, AuditEntry, DiscoverService } from '../lib/types'
+import type { ProxyCredential, ProxyRule, ProxyBinding, ProxyProposal, ProxyAgent, ProxyInvite, ProxyRedeemInviteResponse, AuditEntry, DiscoverService, ProxyRuleTestResponse, ProxyPolicyTemplate } from '../lib/types'
 import { ErrorBoundary } from './ErrorBoundary'
 import { toast } from './VaultDashboard'
 
-type ProxyTab = 'discover' | 'credentials' | 'rules' | 'bindings' | 'proposals' | 'agents' | 'audit'
+type ProxyTab = 'discover' | 'credentials' | 'rules' | 'bindings' | 'proposals' | 'agents' | 'rule_tester' | 'templates' | 'audit'
 
 function formatError(err: unknown): string {
   if (typeof err === 'string') return err
   if (err && typeof err === 'object' && 'toString' in err) return String(err)
   return 'Unexpected error'
+}
+
+function formatRemaining(expiresAt: string, nowMs: number): string {
+  const delta = new Date(expiresAt).getTime() - nowMs
+  if (Number.isNaN(delta) || delta <= 0) return 'expired'
+  const totalSec = Math.floor(delta / 1000)
+  const hours = Math.floor(totalSec / 3600)
+  const mins = Math.floor((totalSec % 3600) / 60)
+  const secs = totalSec % 60
+  if (hours > 0) return `${hours}h ${mins}m ${secs}s`
+  return `${mins}m ${secs}s`
 }
 
 export function ProxyManager() {
@@ -38,6 +50,8 @@ export function ProxyManager() {
   const [showAddBinding, setShowAddBinding] = useState(false)
   const [loading, setLoading] = useState(false)
   const [discoverData, setDiscoverData] = useState<{ services: DiscoverService[]; available_credential_keys: string[] } | null>(null)
+  const [ruleTestResult, setRuleTestResult] = useState<ProxyRuleTestResponse | null>(null)
+  const [policyTemplates, setPolicyTemplates] = useState<ProxyPolicyTemplate[]>([])
 
   const refreshAll = useCallback(async () => {
     const status = await proxyGetStatus().catch(() => null)
@@ -58,9 +72,11 @@ export function ProxyManager() {
       const audit = await proxyAuditLog(50).catch(() => [])
       setProxyAuditEntries(audit)
       const disco = await proxyDiscover(undefined, currentVault?.id).catch(() => null)
+      const templates = await proxyListPolicyTemplates().catch(() => [])
       if (disco) {
         setDiscoverData({ services: disco.services, available_credential_keys: disco.available_credential_keys })
       }
+      setPolicyTemplates(templates)
     }
   }, [currentVault?.id, setProxyStatus, setProxyCredentials, setProxyRules, setProxyBindings, setProxyProposals, setProxyAgents, setProxyInvites, setProxyAuditEntries])
 
@@ -164,44 +180,89 @@ export function ProxyManager() {
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <TabButton active={activeTab === 'discover'} onClick={() => setActiveTab('discover')} icon={<Compass className="w-4 h-4" />} label="Discover" />
-              <TabButton active={activeTab === 'credentials'} onClick={() => setActiveTab('credentials')} icon={<KeyIcon className="w-4 h-4" />} label={`Credentials (${proxyCredentials.length})`} />
-              <TabButton active={activeTab === 'rules'} onClick={() => setActiveTab('rules')} icon={<Filter className="w-4 h-4" />} label={`Rules (${proxyRules.length})`} />
-              <TabButton active={activeTab === 'bindings'} onClick={() => setActiveTab('bindings')} icon={<Link className="w-4 h-4" />} label={`RBAC (${proxyBindings.length})`} />
-              <TabButton active={activeTab === 'proposals'} onClick={() => setActiveTab('proposals')} icon={<Shield className="w-4 h-4" />} label={`Proposals (${proxyProposals.filter(p => p.status === 'pending').length})`} />
-              <TabButton active={activeTab === 'agents'} onClick={() => setActiveTab('agents')} icon={<Server className="w-4 h-4" />} label={`Agents (${proxyAgents.length})`} />
-              <TabButton active={activeTab === 'audit'} onClick={() => setActiveTab('audit')} icon={<FileText className="w-4 h-4" />} label="Audit" />
-              <div className="flex-1" />
-              {activeTab === 'credentials' && (
-                <button onClick={() => setShowAddCred(true)} className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-medium rounded-lg transition-all">
-                  <Plus className="w-4 h-4" /> Add
-                </button>
-              )}
-              {activeTab === 'rules' && (
-                <button onClick={() => setShowAddRule(true)} className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-medium rounded-lg transition-all">
-                  <Plus className="w-4 h-4" /> Add Rule
-                </button>
-              )}
-              {activeTab === 'bindings' && (
-                <button onClick={() => setShowAddBinding(true)} className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-medium rounded-lg transition-all">
-                  <Plus className="w-4 h-4" /> Bind
-                </button>
-              )}
-              {activeTab === 'audit' && (
-                <button onClick={refreshAll} className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-all dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800">
-                  <RefreshCw className="w-4 h-4" />
-                </button>
-              )}
-            </div>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px,1fr]">
+              <aside className="space-y-4">
+                <div className="rounded-2xl border border-slate-200 bg-white/80 p-3 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/40">
+                  <p className="px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Proxy Console</p>
+                  <div className="space-y-1.5">
+                    <TabButton active={activeTab === 'discover'} onClick={() => setActiveTab('discover')} icon={<Compass className="w-4 h-4" />} label="Discover" />
+                    <TabButton active={activeTab === 'credentials'} onClick={() => setActiveTab('credentials')} icon={<KeyIcon className="w-4 h-4" />} label={`Credentials (${proxyCredentials.length})`} />
+                    <TabButton active={activeTab === 'rules'} onClick={() => setActiveTab('rules')} icon={<Filter className="w-4 h-4" />} label={`Rules (${proxyRules.length})`} />
+                    <TabButton active={activeTab === 'rule_tester'} onClick={() => setActiveTab('rule_tester')} icon={<FlaskConical className="w-4 h-4" />} label="Rule Tester" />
+                    <TabButton active={activeTab === 'templates'} onClick={() => setActiveTab('templates')} icon={<BookTemplate className="w-4 h-4" />} label="Templates" />
+                    <TabButton active={activeTab === 'bindings'} onClick={() => setActiveTab('bindings')} icon={<Link className="w-4 h-4" />} label={`RBAC (${proxyBindings.length})`} />
+                    <TabButton active={activeTab === 'proposals'} onClick={() => setActiveTab('proposals')} icon={<Shield className="w-4 h-4" />} label={`Proposals (${proxyProposals.filter(p => p.status === 'pending').length})`} />
+                    <TabButton active={activeTab === 'agents'} onClick={() => setActiveTab('agents')} icon={<Server className="w-4 h-4" />} label={`Agents (${proxyAgents.length})`} />
+                    <TabButton active={activeTab === 'audit'} onClick={() => setActiveTab('audit')} icon={<FileText className="w-4 h-4" />} label="Audit" />
+                  </div>
+                </div>
+                <OnboardingChecklist
+                  statusRunning={Boolean(proxyStatus?.running)}
+                  credentialsCount={proxyCredentials.length}
+                  rulesCount={proxyRules.length}
+                  invitesCount={proxyInvites.length}
+                  hasTestRequest={proxyAuditEntries.length > 0 || ruleTestResult !== null}
+                />
+              </aside>
 
-            {activeTab === 'discover' && <DiscoverTab data={discoverData} onRefresh={refreshAll} />}
-            {activeTab === 'credentials' && <CredentialsList creds={proxyCredentials} onDelete={async (id) => { try { await proxyDeleteCredential(id); await refreshAll(); toast('Credential deleted', 'info') } catch (e) { toast(`Delete failed: ${formatError(e)}`, 'error') } }} />}
-            {activeTab === 'rules' && <RulesList rules={proxyRules} onDelete={async (id) => { try { await proxyDeleteRule(id); await refreshAll(); toast('Rule deleted', 'info') } catch (e) { toast(`Delete failed: ${formatError(e)}`, 'error') } }} />}
-            {activeTab === 'bindings' && <BindingsList bindings={proxyBindings} credentials={proxyCredentials} rules={proxyRules} onDelete={async (id) => { try { await proxyDeleteBinding(id); await refreshAll(); toast('Binding deleted', 'info') } catch (e) { toast(`Delete failed: ${formatError(e)}`, 'error') } }} />}
-            {activeTab === 'proposals' && <ProposalsList proposals={proxyProposals} onApprove={async (id) => { try { await proxyApproveProposal(id); await refreshAll(); toast('Proposal approved', 'success') } catch (e) { toast(`Approve failed: ${formatError(e)}`, 'error') } }} onDeny={async (id) => { try { await proxyDenyProposal(id); await refreshAll(); toast('Proposal denied', 'info') } catch (e) { toast(`Deny failed: ${formatError(e)}`, 'error') } }} />}
-            {activeTab === 'agents' && currentVault && <AgentsList proxyPort={proxyStatus.proxy_port} vaultId={currentVault.id} agents={proxyAgents} invites={proxyInvites} onCreateInvite={async (name) => { try { const invite = await proxyCreateInvite(currentVault.id, name); await refreshAll(); toast('Invite created', 'success'); return invite } catch (e) { toast(`Invite failed: ${formatError(e)}`, 'error'); throw e } }} onRedeem={async (code, name) => { try { const redeemed = await proxyRedeemInvite(code, name); await refreshAll(); toast('Invite redeemed', 'success'); return redeemed } catch (e) { toast(`Redeem failed: ${formatError(e)}`, 'error'); throw e } }} onRotate={async (id) => { try { const rotated = await proxyRotateAgentToken(id); await refreshAll(); toast('Token rotated', 'success'); return rotated } catch (e) { toast(`Rotate failed: ${formatError(e)}`, 'error'); throw e } }} onRevoke={async (id) => { try { await proxyRevokeAgent(id); await refreshAll(); toast('Agent revoked', 'info') } catch (e) { toast(`Revoke failed: ${formatError(e)}`, 'error') } }} />}
-            {activeTab === 'audit' && <AuditLog entries={proxyAuditEntries} />}
+              <section className="rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/40">
+                <div className="mb-4 flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900 dark:text-white">Workspace</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">Safe defaults + guided setup for agent access.</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {(activeTab === 'credentials') && (
+                      <button onClick={() => setShowAddCred(true)} className="flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-2 text-sm font-medium text-slate-950 transition-all hover:bg-emerald-400">
+                        <Plus className="w-4 h-4" /> Add
+                      </button>
+                    )}
+                    {(activeTab === 'rules') && (
+                      <button onClick={() => setShowAddRule(true)} className="flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-2 text-sm font-medium text-slate-950 transition-all hover:bg-emerald-400">
+                        <Plus className="w-4 h-4" /> Add Rule
+                      </button>
+                    )}
+                    {(activeTab === 'bindings') && (
+                      <button onClick={() => setShowAddBinding(true)} className="flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-2 text-sm font-medium text-slate-950 transition-all hover:bg-emerald-400">
+                        <Plus className="w-4 h-4" /> Bind
+                      </button>
+                    )}
+                    <button onClick={refreshAll} className="rounded-lg p-2 text-slate-600 transition-all hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
+                      <RefreshCw className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {activeTab === 'discover' && <DiscoverTab data={discoverData} onRefresh={refreshAll} />}
+                {activeTab === 'credentials' && <CredentialsList creds={proxyCredentials} onDelete={async (id) => { try { await proxyDeleteCredential(id); await refreshAll(); toast('Credential deleted', 'info') } catch (e) { toast(`Delete failed: ${formatError(e)}`, 'error') } }} />}
+                {activeTab === 'rules' && <RulesList rules={proxyRules} onDelete={async (id) => { try { await proxyDeleteRule(id); await refreshAll(); toast('Rule deleted', 'info') } catch (e) { toast(`Delete failed: ${formatError(e)}`, 'error') } }} />}
+                {activeTab === 'rule_tester' && currentVault && (
+                  <RuleTesterPanel
+                    vaultId={currentVault.id}
+                    lastResult={ruleTestResult}
+                    onTest={async (host, path, method) => {
+                      const res = await proxyRuleTest({ vault_id: currentVault.id, host, path, method })
+                      setRuleTestResult(res)
+                      return res
+                    }}
+                  />
+                )}
+                {activeTab === 'templates' && currentVault && (
+                  <PolicyTemplatesPanel
+                    templates={policyTemplates}
+                    onApply={async (templateId) => {
+                      const created = await proxyApplyPolicyTemplate(currentVault.id, templateId)
+                      await refreshAll()
+                      toast(`Applied ${created.length} rule(s)`, 'success')
+                    }}
+                  />
+                )}
+                {activeTab === 'bindings' && <BindingsList bindings={proxyBindings} credentials={proxyCredentials} rules={proxyRules} onDelete={async (id) => { try { await proxyDeleteBinding(id); await refreshAll(); toast('Binding deleted', 'info') } catch (e) { toast(`Delete failed: ${formatError(e)}`, 'error') } }} />}
+                {activeTab === 'proposals' && <ProposalsList proposals={proxyProposals} onApprove={async (id) => { try { await proxyApproveProposal(id); await refreshAll(); toast('Proposal approved', 'success') } catch (e) { toast(`Approve failed: ${formatError(e)}`, 'error') } }} onDeny={async (id) => { try { await proxyDenyProposal(id); await refreshAll(); toast('Proposal denied', 'info') } catch (e) { toast(`Deny failed: ${formatError(e)}`, 'error') } }} />}
+                {activeTab === 'agents' && currentVault && <AgentsList proxyPort={proxyStatus.proxy_port} vaultId={currentVault.id} agents={proxyAgents} invites={proxyInvites} onCreateInvite={async (name) => { try { const invite = await proxyCreateInvite(currentVault.id, name); await refreshAll(); toast('Invite created', 'success'); return invite } catch (e) { toast(`Invite failed: ${formatError(e)}`, 'error'); throw e } }} onRedeem={async (code, name, ttl) => { try { const redeemed = await proxyRedeemInviteWithTtl(code, ttl, name); await refreshAll(); toast('Invite redeemed', 'success'); return redeemed } catch (e) { toast(`Redeem failed: ${formatError(e)}`, 'error'); throw e } }} onRotate={async (id, ttl) => { try { const rotated = await proxyRotateAgentTokenWithTtl(id, ttl); await refreshAll(); toast('Token rotated', 'success'); return rotated } catch (e) { toast(`Rotate failed: ${formatError(e)}`, 'error'); throw e } }} onRevoke={async (id) => { try { await proxyRevokeAgent(id); await refreshAll(); toast('Agent revoked', 'info') } catch (e) { toast(`Revoke failed: ${formatError(e)}`, 'error') } }} />}
+                {activeTab === 'audit' && <AuditLog entries={proxyAuditEntries} />}
+              </section>
+            </div>
           </>
         )}
 
@@ -272,7 +333,7 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
   return (
     <button
       onClick={onClick}
-      className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+      className={`flex w-full items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
         active
           ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/30 dark:text-emerald-400'
           : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800/50'
@@ -280,6 +341,170 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
     >
       {icon} {label}
     </button>
+  )
+}
+
+function OnboardingChecklist({
+  statusRunning,
+  credentialsCount,
+  rulesCount,
+  invitesCount,
+  hasTestRequest,
+}: {
+  statusRunning: boolean
+  credentialsCount: number
+  rulesCount: number
+  invitesCount: number
+  hasTestRequest: boolean
+}) {
+  const items = [
+    { label: 'Start proxy', done: statusRunning },
+    { label: 'Add credential + rule', done: credentialsCount > 0 && rulesCount > 0 },
+    { label: 'Invite an agent', done: invitesCount > 0 },
+    { label: 'Test request', done: hasTestRequest },
+  ]
+  const complete = items.filter(i => i.done).length
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white/80 p-3 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/40">
+      <div className="mb-2 flex items-center gap-2">
+        <Sparkles className="h-4 w-4 text-emerald-500" />
+        <p className="text-sm font-semibold text-slate-900 dark:text-white">Onboarding</p>
+      </div>
+      <p className="mb-3 text-xs text-slate-500 dark:text-slate-400">{complete}/4 complete</p>
+      <div className="space-y-2">
+        {items.map(item => (
+          <div key={item.label} className="flex items-center gap-2 text-xs">
+            <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full border ${item.done ? 'border-emerald-400 bg-emerald-500/20 text-emerald-500' : 'border-slate-300 text-slate-400 dark:border-slate-700'}`}>
+              {item.done ? <Check className="h-3 w-3" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+            </span>
+            <span className={item.done ? 'text-slate-800 dark:text-slate-200' : 'text-slate-500 dark:text-slate-400'}>{item.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function RuleTesterPanel({
+  vaultId,
+  lastResult,
+  onTest,
+}: {
+  vaultId: string
+  lastResult: ProxyRuleTestResponse | null
+  onTest: (host: string, path: string, method: string) => Promise<ProxyRuleTestResponse>
+}) {
+  const [host, setHost] = useState('api.openai.com')
+  const [path, setPath] = useState('/v1/responses')
+  const [method, setMethod] = useState('POST')
+  const [headers, setHeaders] = useState('X-Vault-ID: demo-vault\nX-Agent-ID: demo-agent')
+  const [testing, setTesting] = useState(false)
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!host.trim()) return
+    setTesting(true)
+    try {
+      await onTest(host.trim(), path.trim() || '/', method)
+      toast('Rule test complete', 'success')
+    } catch (err) {
+      toast(`Rule test failed: ${formatError(err)}`, 'error')
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <form onSubmit={submit} className="rounded-xl border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+        <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+          <FlaskConical className="h-4 w-4 text-emerald-500" /> Rule Tester
+        </div>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="Host" className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+          <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/path" className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white" />
+          <select value={method} onChange={(e) => setMethod(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
+            {['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'CONNECT'].map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </div>
+        <textarea value={headers} onChange={(e) => setHeaders(e.target.value)} className="mt-3 min-h-[84px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200" />
+        <div className="mt-3 flex items-center justify-between">
+          <p className="text-xs text-slate-500 dark:text-slate-400">Vault scope: <span className="font-mono">{vaultId}</span></p>
+          <button type="submit" disabled={testing} className="rounded-lg bg-emerald-500 px-3 py-2 text-sm font-medium text-slate-950 transition-all hover:bg-emerald-400 disabled:bg-slate-300 dark:disabled:bg-slate-700">
+            {testing ? 'Testing...' : 'Preview Decision'}
+          </button>
+        </div>
+      </form>
+
+      {lastResult && (
+        <div className={`rounded-xl border p-4 ${lastResult.allow ? 'border-emerald-400/40 bg-emerald-500/10' : 'border-red-400/40 bg-red-500/10'}`}>
+          <p className={`text-sm font-semibold ${lastResult.allow ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+            {lastResult.allow ? 'ALLOW' : 'DENY'} · {lastResult.method} {lastResult.host}{lastResult.path}
+          </p>
+          <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">{lastResult.reason}</p>
+          {lastResult.matched_rule && (
+            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+              Matched rule: <span className="font-semibold">{lastResult.matched_rule.name}</span> · <span className="font-mono">{lastResult.matched_rule.host_match}</span>
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PolicyTemplatesPanel({
+  templates,
+  onApply,
+}: {
+  templates: ProxyPolicyTemplate[]
+  onApply: (templateId: string) => Promise<void>
+}) {
+  const [applying, setApplying] = useState<string | null>(null)
+
+  if (!templates.length) {
+    return (
+      <div className="rounded-xl border-2 border-dashed border-slate-300 py-10 text-center dark:border-slate-700">
+        <p className="text-sm text-slate-500 dark:text-slate-400">No templates loaded.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+      {templates.map((tpl) => (
+        <div key={tpl.id} className="rounded-xl border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+          <div className="mb-2 flex items-center justify-between">
+            <p className="text-sm font-semibold text-slate-900 dark:text-white">{tpl.name}</p>
+            <span className="rounded bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">{tpl.rules.length} rules</span>
+          </div>
+          <p className="text-xs text-slate-500 dark:text-slate-400">{tpl.description}</p>
+          <div className="mt-3 space-y-1.5">
+            {tpl.rules.map(rule => (
+              <div key={rule.id} className="rounded-lg bg-white px-2 py-1.5 text-xs dark:bg-slate-900">
+                <span className="font-mono text-slate-700 dark:text-slate-200">{rule.host_match}</span>
+                <span className="ml-2 text-slate-500 dark:text-slate-400">{rule.methods.join(', ')}</span>
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={async () => {
+              setApplying(tpl.id)
+              try {
+                await onApply(tpl.id)
+              } finally {
+                setApplying(null)
+              }
+            }}
+            disabled={applying === tpl.id}
+            className="mt-3 rounded-lg bg-emerald-500 px-3 py-2 text-sm font-medium text-slate-950 transition-all hover:bg-emerald-400 disabled:bg-slate-300 dark:disabled:bg-slate-700"
+          >
+            {applying === tpl.id ? 'Applying...' : 'Apply Template'}
+          </button>
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -501,8 +726,8 @@ function AgentsList({ proxyPort, vaultId, agents, invites, onCreateInvite, onRed
   agents: ProxyAgent[]
   invites: ProxyInvite[]
   onCreateInvite: (name: string) => Promise<ProxyInvite>
-  onRedeem: (code: string, name?: string) => Promise<ProxyRedeemInviteResponse>
-  onRotate: (id: string) => Promise<ProxyAgent>
+  onRedeem: (code: string, name: string | undefined, ttl: '15m' | '1h' | '24h') => Promise<ProxyRedeemInviteResponse>
+  onRotate: (id: string, ttl: '15m' | '1h' | '24h') => Promise<ProxyAgent>
   onRevoke: (id: string) => Promise<void>
 }) {
   const [inviteName, setInviteName] = useState('')
@@ -515,6 +740,13 @@ function AgentsList({ proxyPort, vaultId, agents, invites, onCreateInvite, onRed
   const [copiedToken, setCopiedToken] = useState(false)
   const [copiedSnippet, setCopiedSnippet] = useState(false)
   const [toolPreset, setToolPreset] = useState<'claude_code' | 'hermes' | 'openclaw' | 'cursor'>('claude_code')
+  const [tokenTtl, setTokenTtl] = useState<'15m' | '1h' | '24h'>('1h')
+  const [nowMs, setNowMs] = useState(Date.now())
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [])
 
   const buildConfigSnippet = (preset: 'claude_code' | 'hermes' | 'openclaw' | 'cursor') => {
     if (!issuedToken || !issuedAgentId) return ''
@@ -597,7 +829,7 @@ function AgentsList({ proxyPort, vaultId, agents, invites, onCreateInvite, onRed
     if (!redeemCode.trim()) return
     setRedeeming(true)
     try {
-      const redeemed = await onRedeem(redeemCode.trim(), redeemName.trim() || undefined)
+      const redeemed = await onRedeem(redeemCode.trim(), redeemName.trim() || undefined, tokenTtl)
       setIssuedAgentId(redeemed.agent.id)
       setIssuedToken(redeemed.token)
       setRedeemCode('')
@@ -670,7 +902,7 @@ function AgentsList({ proxyPort, vaultId, agents, invites, onCreateInvite, onRed
 
       <form onSubmit={redeemInvite} className="bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-800 p-4">
         <h4 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">Redeem Invite</h4>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
           <input
             type="text"
             value={redeemCode}
@@ -685,6 +917,11 @@ function AgentsList({ proxyPort, vaultId, agents, invites, onCreateInvite, onRed
             placeholder="Agent name (optional)"
             className="px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500/50 transition-all dark:bg-slate-950 dark:border-slate-700 dark:text-white dark:placeholder-slate-500"
           />
+          <select value={tokenTtl} onChange={e => setTokenTtl(e.target.value as '15m' | '1h' | '24h')} className="px-3 py-2 bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:border-emerald-500/50 transition-all dark:bg-slate-950 dark:border-slate-700 dark:text-white">
+            <option value="15m">15 minutes</option>
+            <option value="1h">1 hour</option>
+            <option value="24h">24 hours</option>
+          </select>
         </div>
         <div className="mt-2 flex justify-end">
           <button type="submit" disabled={!redeemCode.trim() || redeeming} className="px-4 py-2 bg-blue-500 hover:bg-blue-400 disabled:bg-slate-300 dark:disabled:bg-slate-700 text-white font-medium rounded-lg transition-all">
@@ -778,13 +1015,18 @@ function AgentsList({ proxyPort, vaultId, agents, invites, onCreateInvite, onRed
                 <div className="min-w-0">
                   <p className="font-medium text-sm text-slate-900 dark:text-white truncate">{agent.name}</p>
                   <p className="text-xs font-mono text-slate-500 dark:text-slate-400">{agent.id}</p>
+                  {agent.expires_at && agent.status === 'active' && (
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Expires in {formatRemaining(agent.expires_at, nowMs)}
+                    </p>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <span className={`px-2 py-0.5 rounded text-[10px] font-mono ${
                     agent.status === 'active' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
                   }`}>{agent.status}</span>
                   <button onClick={async () => {
-                    const rotated = await onRotate(agent.id)
+                    const rotated = await onRotate(agent.id, tokenTtl)
                     if (rotated.token) {
                       setIssuedAgentId(agent.id)
                       setIssuedToken(rotated.token)

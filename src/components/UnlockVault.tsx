@@ -1,6 +1,18 @@
 import { useState, useEffect } from 'react'
 import { Lock, ArrowLeft, ShieldAlert, Loader2, Fingerprint, KeyRound } from 'lucide-react'
-import { pbkdf2KeyDerive, aesDecrypt, biometricAvailable, biometricUnlock, biometricStoreKey } from '../lib/api'
+import {
+  aesDecrypt,
+  aesEncrypt,
+  argon2KeyDerive,
+  biometricAvailable,
+  biometricStoreKey,
+  biometricUnlock,
+  generateDataKey,
+  pbkdf2KeyDerive,
+  unwrapDataKey,
+  vaultSave,
+  wrapDataKey,
+} from '../lib/api'
 import type { Vault } from '../lib/types'
 import { useVaultStore } from '../lib/store'
 import { ErrorBoundary } from './ErrorBoundary'
@@ -82,22 +94,45 @@ export function UnlockVault({ vault, onBack }: Props) {
     setIsLoading(true)
 
     try {
-      // Derive key with PBKDF2 (fast, ~100ms)
-      let key: string
-      try {
-        key = await pbkdf2KeyDerive(passphrase, vault.salt)
-      } catch (e) {
-        console.error('[Unlock] pbkdf2KeyDerive failed:', e)
-        throw e
-      }
+      const isWrapped = Boolean(vault.wrapped_dek && (vault.version ?? 1) >= 2)
 
-      // Decrypt
+      let unlockedVault: Vault = vault
+      let dataKeyForSession: string
       let decrypted: string
-      try {
-        decrypted = await aesDecrypt(key, vault.ciphertext)
-      } catch (e) {
-        console.error('[Unlock] aesDecrypt FAILED. vault id:', vault.id, '| salt len:', vault.salt.length, '| ct len:', vault.ciphertext.length, '| derived key len:', key.length, '| derived key (b64):', key)
-        throw e
+
+      if (isWrapped) {
+        // v2 vault: KEK (argon2) unwraps DEK; DEK decrypts vault data.
+        const kek = await argon2KeyDerive(passphrase, vault.salt)
+        dataKeyForSession = await unwrapDataKey(vault.wrapped_dek as string, kek)
+        decrypted = await aesDecrypt(dataKeyForSession, vault.ciphertext)
+      } else {
+        // Legacy vault: PBKDF2-derived key decrypts ciphertext directly.
+        const legacyKey = await pbkdf2KeyDerive(passphrase, vault.salt)
+        decrypted = await aesDecrypt(legacyKey, vault.ciphertext)
+
+        // Auto-migrate legacy vaults to v2 format once we have the passphrase.
+        // If migration fails for any reason, we still unlock using the legacy key.
+        try {
+          const kek = await argon2KeyDerive(passphrase, vault.salt)
+          const dek = await generateDataKey()
+          const wrappedDek = await wrapDataKey(dek, kek)
+          const newCiphertext = await aesEncrypt(dek, decrypted)
+
+          const migrated: Vault = {
+            ...vault,
+            version: 2,
+            kdf: 'argon2id',
+            wrapped_dek: wrappedDek,
+            ciphertext: newCiphertext,
+          }
+
+          await vaultSave(migrated)
+          unlockedVault = migrated
+          dataKeyForSession = dek
+        } catch (migrateErr) {
+          console.warn('[Unlock] Legacy migration failed; continuing in legacy mode:', migrateErr)
+          dataKeyForSession = legacyKey
+        }
       }
 
       // Parse JSON
@@ -111,11 +146,11 @@ export function UnlockVault({ vault, onBack }: Props) {
 
       // Success — unlock the vault FIRST, then store key for biometric
       // so a keychain failure doesn't lock the user out.
-      unlock(vault, data, key)
+      unlock(unlockedVault, data, dataKeyForSession)
 
       if (biometricEnabled) {
         try {
-          await biometricStoreKey(vault.id, key)
+          await biometricStoreKey(vault.id, dataKeyForSession)
         } catch (storeErr) {
           console.warn('Failed to store key for biometric:', storeErr)
         }

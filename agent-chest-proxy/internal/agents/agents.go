@@ -22,6 +22,7 @@ type Agent struct {
 	Name      string `json:"name"`
 	Status    string `json:"status"`
 	Token     string `json:"token,omitempty"`
+	ExpiresAt string `json:"expires_at,omitempty"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
@@ -43,6 +44,7 @@ type agentRecord struct {
 	Name      string `json:"name"`
 	Status    string `json:"status"`
 	TokenHash string `json:"token_hash"`
+	ExpiresAt string `json:"expires_at,omitempty"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
@@ -94,6 +96,7 @@ func toPublicAgent(rec agentRecord) Agent {
 		VaultID:   rec.VaultID,
 		Name:      rec.Name,
 		Status:    rec.Status,
+		ExpiresAt: rec.ExpiresAt,
 		CreatedAt: rec.CreatedAt,
 		UpdatedAt: rec.UpdatedAt,
 	}
@@ -182,7 +185,7 @@ func (m *Manager) ListInvites(vaultID string) []Invite {
 	return out
 }
 
-func (m *Manager) RedeemInvite(code, name string) (Invite, Agent, string, bool) {
+func (m *Manager) RedeemInvite(code, name string, ttl time.Duration) (Invite, Agent, string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	inv, ok := m.invites[code]
@@ -203,6 +206,9 @@ func (m *Manager) RedeemInvite(code, name string) (Invite, Agent, string, bool) 
 		CreatedAt: now(),
 		UpdatedAt: now(),
 	}
+	if ttl > 0 {
+		rec.ExpiresAt = time.Now().UTC().Add(ttl).Format(time.RFC3339)
+	}
 	m.agents[rec.ID] = rec
 
 	inv.Status = "redeemed"
@@ -214,6 +220,8 @@ func (m *Manager) RedeemInvite(code, name string) (Invite, Agent, string, bool) 
 }
 
 func (m *Manager) ListAgents(vaultID string) []Agent {
+	m.expireAgents()
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make([]Agent, 0, len(m.agents))
@@ -227,7 +235,7 @@ func (m *Manager) ListAgents(vaultID string) []Agent {
 	return out
 }
 
-func (m *Manager) RotateToken(id string) (Agent, string, bool) {
+func (m *Manager) RotateToken(id string, ttl time.Duration) (Agent, string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	agent, ok := m.agents[id]
@@ -236,6 +244,12 @@ func (m *Manager) RotateToken(id string) (Agent, string, bool) {
 	}
 	token := newSecretToken()
 	agent.TokenHash = hashToken(token)
+	agent.Status = "active"
+	if ttl > 0 {
+		agent.ExpiresAt = time.Now().UTC().Add(ttl).Format(time.RFC3339)
+	} else {
+		agent.ExpiresAt = ""
+	}
 	agent.UpdatedAt = now()
 	m.agents[id] = agent
 	_ = m.persistLocked()
@@ -251,6 +265,7 @@ func (m *Manager) Revoke(id string) (Agent, bool) {
 	}
 	agent.Status = "revoked"
 	agent.TokenHash = ""
+	agent.ExpiresAt = ""
 	agent.UpdatedAt = now()
 	m.agents[id] = agent
 	_ = m.persistLocked()
@@ -258,6 +273,8 @@ func (m *Manager) Revoke(id string) (Agent, bool) {
 }
 
 func (m *Manager) Authenticate(agentID, vaultID, token string) (Agent, bool) {
+	m.expireAgents()
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	rec, ok := m.agents[agentID]
@@ -275,4 +292,30 @@ func (m *Manager) Authenticate(agentID, vaultID, token string) (Agent, bool) {
 		return Agent{}, false
 	}
 	return toPublicAgent(rec), true
+}
+
+func (m *Manager) expireAgents() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	changed := false
+	nowTime := time.Now().UTC()
+	for id, rec := range m.agents {
+		if rec.Status != "active" || rec.ExpiresAt == "" {
+			continue
+		}
+		expiresAt, err := time.Parse(time.RFC3339, rec.ExpiresAt)
+		if err != nil {
+			continue
+		}
+		if !nowTime.Before(expiresAt) {
+			rec.Status = "revoked"
+			rec.TokenHash = ""
+			rec.UpdatedAt = now()
+			m.agents[id] = rec
+			changed = true
+		}
+	}
+	if changed {
+		_ = m.persistLocked()
+	}
 }

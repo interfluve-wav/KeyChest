@@ -80,6 +80,10 @@ npm run tauri build      # Build the Tauri app bundle
 - `Settings.tsx` — auto-lock, theme, Touch ID clear, vault export/import
 - `QuickPicker.tsx` — global hotkey overlay
 - `ProxyManager.tsx` — Agent Chest proxy management (discover, credentials, rules, bindings, proposals, agents/invites, audit) (`Cmd+Shift+K`) for fast key search/copy
+  - Includes Rule Tester preview panel (allow/deny + matched rule)
+  - Includes policy template library (OpenAI/GitHub/Stripe/AWS safe presets)
+  - Includes onboarding checklist (`Start proxy → add cred/rule → invite → test request`)
+  - Includes token TTL controls (15m/1h/24h) with countdown + auto-expiry
 
 **Styling:** Tailwind CSS via `tailwind.config.js`; dark theme default.
 
@@ -111,8 +115,10 @@ npm run tauri build      # Build the Tauri app bundle
 Standalone Go binary that the Rust backend spawns as a child process. Provides:
 - HTTP/HTTPS proxy on `:8080` with credential injection (Bearer, API key header, Basic auth, passthrough)
 - Management API on `:8081` with REST endpoints for credentials, rules, bindings, audit, discover, explicit proxy
+- Extra management endpoints: rule testing (`POST /api/v1/rules/test`) and policy templates (`GET/POST /api/v1/policy-templates`)
 - Firewall-like access rules (allow/deny by host pattern, path pattern, method)
 - Multi-vault RBAC bindings to scope agent blast radius
+- Agent token TTL + auto-revoke when expired
 - Audit trail with file persistence and subscriber model
 - HTTPS CONNECT upgrade to forward-proxy when credentials match
 - Network guard (SSRF prevention): blocks private IPs, loopback, cloud metadata endpoints (169.254.169.254)

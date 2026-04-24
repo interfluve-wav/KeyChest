@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Vault, VaultData, ImportedKey, Settings, ProxyCredential, ProxyRule, ProxyBinding, ProxyProposal, ProxyAgent, ProxyInvite, ProxyRedeemInviteResponse, AuditEntry, ProxyStatus, DiscoverResponse } from './types';
+import type { Vault, VaultData, ImportedKey, Settings, ProxyCredential, ProxyRule, ProxyBinding, ProxyProposal, ProxyAgent, ProxyInvite, ProxyRedeemInviteResponse, AuditEntry, ProxyStatus, DiscoverResponse, ProxyRuleTestRequest, ProxyRuleTestResponse, ProxyPolicyTemplate } from './types';
 
 // Vault management
 export const vaultList = (): Promise<Vault[]> => invoke('vault_list');
@@ -25,7 +25,16 @@ export const aesEncrypt = (key: string, plaintext: string): Promise<string> =>
 export const aesDecrypt = (key: string, encrypted: string): Promise<string> =>
   invoke('aes_decrypt', { key, encrypted });
 export const generateSalt = (): Promise<string> => invoke('generate_salt_cmd');
+export const generateDataKey = (): Promise<string> => invoke('generate_data_key_cmd');
+export const wrapDataKey = (dataKey: string, kek: string): Promise<string> =>
+  invoke('wrap_data_key_cmd', { data_key: dataKey, key: kek });
+export const unwrapDataKey = (wrappedKey: string, kek: string): Promise<string> =>
+  invoke('unwrap_data_key_cmd', { wrapped_key: wrappedKey, key: kek });
 export const generateUuid = (): Promise<string> => invoke('generate_uuid');
+
+// Vault meta operations
+export const vaultChangePassword = (vault: Vault, dataKey: string, newPassword: string): Promise<Vault> =>
+  invoke('vault_change_password', { vault, data_key: dataKey, new_password: newPassword });
 
 // SSH
 export interface SshKeygenResult {
@@ -160,7 +169,9 @@ export const proxyDenyProposal = (id: string, mgmtPort?: number): Promise<ProxyP
 export const proxyListAgents = (mgmtPort?: number, vaultId?: string): Promise<ProxyAgent[]> =>
   invoke('proxy_list_agents', { mgmtPort, vaultId });
 export const proxyRotateAgentToken = (id: string, mgmtPort?: number): Promise<ProxyAgent> =>
-  invoke('proxy_rotate_agent_token', { id, mgmtPort });
+  invoke('proxy_rotate_agent_token', { id, mgmtPort, ttl: '1h' });
+export const proxyRotateAgentTokenWithTtl = (id: string, ttl: '15m' | '1h' | '24h', mgmtPort?: number): Promise<ProxyAgent> =>
+  invoke('proxy_rotate_agent_token', { id, mgmtPort, ttl });
 export const proxyRevokeAgent = (id: string, mgmtPort?: number): Promise<ProxyAgent> =>
   invoke('proxy_revoke_agent', { id, mgmtPort });
 export const proxyListInvites = (mgmtPort?: number, vaultId?: string): Promise<ProxyInvite[]> =>
@@ -168,8 +179,16 @@ export const proxyListInvites = (mgmtPort?: number, vaultId?: string): Promise<P
 export const proxyCreateInvite = (vaultId: string, name: string, mgmtPort?: number): Promise<ProxyInvite> =>
   invoke('proxy_create_invite', { vaultId, name, mgmtPort });
 export const proxyRedeemInvite = (code: string, name?: string, mgmtPort?: number): Promise<ProxyRedeemInviteResponse> =>
-  invoke('proxy_redeem_invite', { code, name, mgmtPort });
+  invoke('proxy_redeem_invite', { code, name, mgmtPort, ttl: '1h' });
+export const proxyRedeemInviteWithTtl = (code: string, ttl: '15m' | '1h' | '24h', name?: string, mgmtPort?: number): Promise<ProxyRedeemInviteResponse> =>
+  invoke('proxy_redeem_invite', { code, name, mgmtPort, ttl });
 export const proxyAuditLog = (limit?: number, offset?: number, mgmtPort?: number): Promise<AuditEntry[]> =>
   invoke('proxy_audit_log', { limit, offset, mgmtPort });
 export const proxyDiscover = (mgmtPort?: number, vaultId?: string): Promise<DiscoverResponse> =>
   invoke('proxy_discover', { mgmtPort, vaultId });
+export const proxyRuleTest = (request: ProxyRuleTestRequest, mgmtPort?: number): Promise<ProxyRuleTestResponse> =>
+  invoke('proxy_rule_test', { request, mgmtPort });
+export const proxyListPolicyTemplates = (mgmtPort?: number): Promise<ProxyPolicyTemplate[]> =>
+  invoke('proxy_list_policy_templates', { mgmtPort });
+export const proxyApplyPolicyTemplate = (vaultId: string, templateId: string, mgmtPort?: number): Promise<ProxyRule[]> =>
+  invoke('proxy_apply_policy_template', { vaultId, templateId, mgmtPort });

@@ -25,7 +25,10 @@ AI agents shouldn't hold raw API keys. Agent Chest runs a local HTTPS proxy that
 **What you get:**
 - Brokered access through HTTPS_PROXY, not retrieval — nothing to exfiltrate
 - Firewall-like access rules (allow/deny by host, path, method)
+- Built-in Rule Tester panel (preview allow/deny + matched rule before live calls)
+- Policy templates library (OpenAI, GitHub, Stripe, AWS safe defaults)
 - Multi-vault RBAC to scope agents to a tight blast radius
+- Agent token TTLs (`15m`, `1h`, `24h`) with countdown and automatic revoke on expiry
 - Explicit `/proxy/{host}/{path}` denials return JSON with `proposal_hint`
 - CONNECT denials may only be visible in the audit log; `curl` can report `000` if the tunnel never completes
 - Full audit trail of every passing call
@@ -41,8 +44,10 @@ From the app UI (Proxy tab):
 2. Add Credential, Rule, and RBAC Binding
 3. Create Invite
 4. Redeem Invite (gets `X-Agent-ID` + one-time token)
-5. Use the built-in one-click snippet exporter (`Claude Code`, `Hermes`, `OpenClaw`, `Cursor`)
-6. Copy or download snippet and paste into your agent tool config
+5. Pick token TTL (15m/1h/24h) and copy the generated snippet
+6. Use Rule Tester to preview policy outcomes before agent execution
+7. Use the built-in one-click snippet exporter (`Claude Code`, `Hermes`, `OpenClaw`, `Cursor`)
+8. Copy or download snippet and paste into your agent tool config
 
 ## Core Features
 
@@ -296,6 +301,9 @@ Deleting from app:
 | `proxy_list_invites` | proxy | List invites |
 | `proxy_create_invite` | proxy | Create invite |
 | `proxy_redeem_invite` | proxy | Redeem invite into agent + token |
+| `proxy_rule_test` | proxy | Preview allow/deny + matched rule for a request |
+| `proxy_list_policy_templates` | proxy | List built-in policy templates |
+| `proxy_apply_policy_template` | proxy | Apply a policy template as concrete rules |
 | `proxy_audit_log` | proxy | Query audit trail |
 
 ## Vault Integrity Diagnostics
