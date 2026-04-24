@@ -220,12 +220,14 @@ pub async fn proxy_start(
     let proxy_port = proxy_port.unwrap_or(8080);
     let mgmt_port = mgmt_port.unwrap_or(8081);
 
-    // Handle the common case where the app restarted but the proxy is still running.
+    // If a proxy is already running (even if we don't have a child handle),
+    // treat this as a successful "start" and surface the running status to the UI.
     if mgmt_reachable(mgmt_port).await {
-        return Err(format!(
-            "Proxy already running on mgmt port {}. Stop it first (or kill the existing process).",
-            mgmt_port
-        ));
+        return Ok(ProxyStatus {
+            running: true,
+            proxy_port,
+            mgmt_port,
+        });
     }
 
     {
@@ -241,7 +243,13 @@ pub async fn proxy_start(
         }
 
         if lock.is_some() {
-            return Err("Proxy is already running".to_string());
+            // If we have a child handle but mgmt isn't reachable yet, we're in startup.
+            // Return running so the UI shows the Stop button and can recover.
+            return Ok(ProxyStatus {
+                running: true,
+                proxy_port,
+                mgmt_port,
+            });
         }
 
         let proxy_binary = find_proxy_binary(&app)?;
@@ -291,16 +299,18 @@ pub async fn proxy_start(
 
     // Wait briefly for the mgmt server to come up so the UI can immediately
     // transition into the "running" state.
+    let mut ready = false;
     let start = std::time::Instant::now();
-    while start.elapsed() < std::time::Duration::from_secs(2) {
+    while start.elapsed() < std::time::Duration::from_secs(3) {
         if mgmt_reachable(mgmt_port).await {
+            ready = true;
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
     // If mgmt still isn't reachable, treat startup as failed and clean up.
-    if !mgmt_reachable(mgmt_port).await {
+    if !ready {
         let mut lock = PROXY_PROCESS
             .lock()
             .map_err(|e| format!("Lock error: {}", e))?;
