@@ -27,14 +27,14 @@ export const aesDecrypt = (key: string, encrypted: string): Promise<string> =>
 export const generateSalt = (): Promise<string> => invoke('generate_salt_cmd');
 export const generateDataKey = (): Promise<string> => invoke('generate_data_key_cmd');
 export const wrapDataKey = (dataKey: string, kek: string): Promise<string> =>
-  invoke('wrap_data_key_cmd', { data_key: dataKey, key: kek });
+  invoke('wrap_data_key_cmd', { dataKey, key: kek });
 export const unwrapDataKey = (wrappedKey: string, kek: string): Promise<string> =>
-  invoke('unwrap_data_key_cmd', { wrapped_key: wrappedKey, key: kek });
+  invoke('unwrap_data_key_cmd', { wrappedKey, key: kek });
 export const generateUuid = (): Promise<string> => invoke('generate_uuid');
 
 // Vault meta operations
 export const vaultChangePassword = (vault: Vault, dataKey: string, newPassword: string): Promise<Vault> =>
-  invoke('vault_change_password', { vault, data_key: dataKey, new_password: newPassword });
+  invoke('vault_change_password', { vault, dataKey, newPassword });
 
 // SSH
 export interface SshKeygenResult {

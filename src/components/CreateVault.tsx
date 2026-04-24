@@ -74,7 +74,7 @@ export function CreateVault({ onBack, onCreated }: Props) {
       unlock(vault, { keys: [], api_keys: [], notes: [], pgp_keys: [] }, dek)
       onCreated(vault)
     } catch (err) {
-      setError('Failed to create vault')
+      setError(`Failed to create vault: ${String(err)}`)
       console.error(err)
     } finally {
       setIsLoading(false)

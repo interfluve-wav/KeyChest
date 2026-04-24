@@ -157,7 +157,7 @@ export function UnlockVault({ vault, onBack }: Props) {
       }
     } catch (err) {
       // Show detailed error for debugging
-      setError(`Unlock failed — check browser console (Cmd+Option+J)`)
+      setError(`Unlock failed: ${String(err)} — check browser console (Cmd+Option+J)`)
       console.error('[Unlock] FULL ERROR:', err)
     } finally {
       setIsLoading(false)
