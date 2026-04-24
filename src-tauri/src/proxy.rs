@@ -296,7 +296,7 @@ pub async fn proxy_start(
         if mgmt_reachable(mgmt_port).await {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
     // If mgmt still isn't reachable, treat startup as failed and clean up.

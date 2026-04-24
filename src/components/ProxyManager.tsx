@@ -31,6 +31,18 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let t: any
+  const timeout = new Promise<T>((_, reject) => {
+    t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+  })
+  try {
+    return await Promise.race([p, timeout])
+  } finally {
+    clearTimeout(t)
+  }
+}
+
 function formatRemaining(expiresAt: string, nowMs: number): string {
   const delta = new Date(expiresAt).getTime() - nowMs
   if (Number.isNaN(delta) || delta <= 0) return 'expired'
@@ -92,15 +104,15 @@ export function ProxyManager() {
     try {
       let status: ProxyStatus
       try {
-        status = await proxyStart(8080, 8081)
+        status = await withTimeout(proxyStart(8080, 8081), 7000, 'Starting proxy')
       } catch (e: any) {
         const msg = formatError(e)
         // Common: stale running proxy (app restart) or raced stop/start.
         if (msg.includes('already running')) {
           try {
-            await proxyStop()
+            await withTimeout(proxyStop(), 5000, 'Stopping existing proxy')
             await sleep(300)
-            status = await proxyStart(8080, 8081)
+            status = await withTimeout(proxyStart(8080, 8081), 7000, 'Restarting proxy')
           } catch (e2: any) {
             throw new Error(`${msg} (auto-restart failed: ${formatError(e2)})`)
           }
@@ -123,10 +135,10 @@ export function ProxyManager() {
   const handleStop = async () => {
     setLoading(true)
     try {
-      await proxyStop()
+      await withTimeout(proxyStop(), 5000, 'Stopping proxy')
       // Wait for status to flip before clearing the UI, otherwise stop/start can race.
       for (let i = 0; i < 10; i++) {
-        const s = await proxyGetStatus().catch(() => null)
+        const s = await withTimeout(proxyGetStatus().catch(() => null), 2000, 'Checking proxy status')
         if (!s?.running) break
         await sleep(150)
       }
