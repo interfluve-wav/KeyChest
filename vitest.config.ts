@@ -9,6 +9,10 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    maxWorkers: 1,
+    minWorkers: 1,
+    include: ['src/test/**/*.{test,spec}.{ts,tsx}'],
+    exclude: ['e2e/**', 'node_modules/**', 'dist/**'],
   },
   resolve: {
     alias: {

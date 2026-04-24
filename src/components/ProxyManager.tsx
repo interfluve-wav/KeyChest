@@ -104,7 +104,7 @@ export function ProxyManager() {
     try {
       let status: ProxyStatus
       try {
-        status = await withTimeout(proxyStart(8080, 8081), 7000, 'Starting proxy')
+        status = await withTimeout(proxyStart(8080, 8081), 12000, 'Starting proxy')
       } catch (e: any) {
         const msg = formatError(e)
         // Common: stale running proxy (app restart) or raced stop/start.
@@ -112,12 +112,18 @@ export function ProxyManager() {
           try {
             await withTimeout(proxyStop(), 5000, 'Stopping existing proxy')
             await sleep(300)
-            status = await withTimeout(proxyStart(8080, 8081), 7000, 'Restarting proxy')
+            status = await withTimeout(proxyStart(8080, 8081), 12000, 'Restarting proxy')
           } catch (e2: any) {
             throw new Error(`${msg} (auto-restart failed: ${formatError(e2)})`)
           }
         } else {
-          throw e
+          // If UI timeout fires but backend completed startup, recover gracefully.
+          const maybeStatus = await proxyGetStatus().catch(() => null)
+          if (maybeStatus?.running) {
+            status = maybeStatus
+          } else {
+            throw e
+          }
         }
       }
 

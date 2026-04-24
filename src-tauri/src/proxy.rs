@@ -181,34 +181,130 @@ fn maybe_kill_proxy_by_mgmt_port(mgmt_port: u16) -> Result<bool, String> {
     }
 }
 
+fn maybe_kill_proxy_by_port(port: u16) -> Result<bool, String> {
+    // Best-effort cleanup by arbitrary listening port. We still only kill
+    // processes whose command line includes "agent-chest-proxy".
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let out = std::process::Command::new("lsof")
+            .arg("-ti")
+            .arg(format!("tcp:{}", port))
+            .output()
+            .map_err(|e| format!("Failed to run lsof: {}", e))?;
+        let s = String::from_utf8_lossy(&out.stdout);
+        let mut killed_any = false;
+        for line in s.lines() {
+            let pid = line.trim();
+            if pid.is_empty() {
+                continue;
+            }
+
+            let cmd_out = std::process::Command::new("ps")
+                .arg("-p")
+                .arg(pid)
+                .arg("-o")
+                .arg("command=")
+                .output()
+                .map_err(|e| format!("Failed to run ps: {}", e))?;
+            let cmdline = String::from_utf8_lossy(&cmd_out.stdout);
+            if !cmdline.contains("agent-chest-proxy") {
+                continue;
+            }
+
+            let _ = std::process::Command::new("kill").arg(pid).status();
+            killed_any = true;
+        }
+        return Ok(killed_any);
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = port;
+        Ok(false)
+    }
+}
+
+fn kill_tracked_proxy_process() -> Result<bool, String> {
+    let mut lock = PROXY_PROCESS
+        .lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+    if let Some(mut child) = lock.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+pub fn proxy_force_cleanup_ports(proxy_port: u16, mgmt_port: u16) -> Result<(), String> {
+    let _ = kill_tracked_proxy_process()?;
+    let _ = maybe_kill_proxy_by_port(proxy_port)?;
+    let _ = maybe_kill_proxy_by_port(mgmt_port)?;
+    Ok(())
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn ensure_executable(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mode = meta.permissions().mode();
+        if mode & 0o111 == 0 {
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode | 0o755));
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn ensure_executable(_path: &std::path::Path) {}
+
 fn find_proxy_binary(app: &AppHandle) -> Result<PathBuf, String> {
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|e| format!("Failed to get resource dir: {}", e))?;
     let binary_name = if cfg!(target_os = "windows") {
         "agent-chest-proxy.exe"
     } else {
         "agent-chest-proxy"
     };
-    let proxy_path = resource_dir.join(binary_name);
-    if proxy_path.exists() {
-        return Ok(proxy_path);
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join(binary_name));
+        // Some bundle layouts may nest resources further.
+        candidates.push(resource_dir.join("resources").join(binary_name));
     }
-    let current_dir = std::env::current_dir().map_err(|e| format!("Failed to get cwd: {}", e))?;
-    let local_path = current_dir.join(binary_name);
-    if local_path.exists() {
-        return Ok(local_path);
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir.join(binary_name));
+        candidates.push(current_dir.join("src-tauri").join(binary_name));
     }
-    let sibling_path = std::env::current_exe()
-        .map_err(|e| format!("Failed to get exe path: {}", e))?
-        .parent()
-        .ok_or("No parent dir")?
-        .join(binary_name);
-    if sibling_path.exists() {
-        return Ok(sibling_path);
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_parent) = exe.parent() {
+            candidates.push(exe_parent.join(binary_name));
+            candidates.push(exe_parent.join("../Resources").join(binary_name));
+            candidates.push(
+                exe_parent
+                    .join("../Resources/resources")
+                    .join(binary_name),
+            );
+        }
     }
-    Err("agent-chest-proxy binary not found. Build it with: cd agent-chest-proxy && go build -o ../src-tauri/ ./cmd/agent-chest-proxy/".to_string())
+
+    for path in &candidates {
+        if path.exists() {
+            ensure_executable(path);
+            return Ok(path.clone());
+        }
+    }
+
+    let attempted = candidates
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "agent-chest-proxy binary not found. Tried: {}. Build it with: cd agent-chest-proxy && go build -o ../src-tauri/ ./cmd/agent-chest-proxy/",
+        attempted
+    ))
 }
 
 #[tauri::command]
@@ -229,6 +325,11 @@ pub async fn proxy_start(
             mgmt_port,
         });
     }
+
+    // Proactively clean up stale proxy processes (common after hard app close).
+    // We only kill processes that match agent-chest-proxy.
+    let _ = proxy_force_cleanup_ports(proxy_port, mgmt_port);
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
     {
         let mut lock = PROXY_PROCESS
@@ -268,7 +369,13 @@ pub async fn proxy_start(
             .create(true)
             .append(true)
             .open(&log_path)
-            .map_err(|e| format!("Failed to open proxy log file {}: {}", log_path.display(), e))?;
+            .map_err(|e| {
+                format!(
+                    "Failed to open proxy log file {}: {}",
+                    log_path.display(),
+                    e
+                )
+            })?;
         let log_file_err = log_file
             .try_clone()
             .map_err(|e| format!("Failed to clone proxy log handle: {}", e))?;
@@ -301,7 +408,23 @@ pub async fn proxy_start(
     // transition into the "running" state.
     let mut ready = false;
     let start = std::time::Instant::now();
-    while start.elapsed() < std::time::Duration::from_secs(3) {
+    while start.elapsed() < std::time::Duration::from_secs(8) {
+        {
+            // If the child already exited, fail fast and avoid a misleading timeout.
+            let mut lock = PROXY_PROCESS
+                .lock()
+                .map_err(|e| format!("Lock error: {}", e))?;
+            if let Some(child) = lock.as_mut() {
+                if let Ok(Some(status)) = child.try_wait() {
+                    *lock = None;
+                    return Err(format!(
+                        "Proxy exited during startup with status {}. Check ~/Library/Application Support/com.keynest.desktop/agent-chest-proxy.log",
+                        status
+                    ));
+                }
+            }
+        }
+
         if mgmt_reachable(mgmt_port).await {
             ready = true;
             break;
@@ -334,20 +457,10 @@ pub async fn proxy_start(
 #[tauri::command]
 pub async fn proxy_stop(mgmt_port: Option<u16>) -> Result<(), String> {
     let mgmt_port = mgmt_port.unwrap_or(8081);
-    let mut lock = PROXY_PROCESS
-        .lock()
-        .map_err(|e| format!("Lock error: {}", e))?;
+    let proxy_port = mgmt_port.saturating_sub(1);
+    let _ = proxy_force_cleanup_ports(proxy_port, mgmt_port)?;
 
-    if let Some(mut child) = lock.take() {
-        child
-            .kill()
-            .map_err(|e| format!("Failed to kill proxy: {}", e))?;
-        let _ = child.wait();
-        return Ok(());
-    }
-
-    // Best-effort fallback: if we lost the handle, try to kill whatever is
-    // listening on the requested/default mgmt port (and looks like agent-chest-proxy).
+    // Keep existing behavior for compatibility; this is now mostly redundant.
     let _ = maybe_kill_proxy_by_mgmt_port(mgmt_port)?;
     Ok(())
 }
@@ -1027,4 +1140,105 @@ pub async fn proxy_discover(
         .await
         .map_err(|e| format!("Parse error: {}", e))?;
     Ok(discover)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::proxy_force_cleanup_ports;
+    use std::path::PathBuf;
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    fn pick_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind ephemeral port")
+            .local_addr()
+            .expect("local addr")
+            .port()
+    }
+
+    fn port_open(port: u16) -> bool {
+        std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            Duration::from_millis(150),
+        )
+        .is_ok()
+    }
+
+    fn find_test_proxy_binary() -> Option<PathBuf> {
+        let cwd = std::env::current_dir().ok()?;
+        let name = if cfg!(target_os = "windows") {
+            "agent-chest-proxy.exe"
+        } else {
+            "agent-chest-proxy"
+        };
+        let here = cwd.join(name);
+        if here.exists() {
+            return Some(here);
+        }
+        let up_one = cwd.parent().map(|p| p.join("src-tauri").join(name));
+        if let Some(path) = up_one {
+            if path.exists() {
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn force_cleanup_kills_proxy_listeners() {
+        let Some(bin) = find_test_proxy_binary() else {
+            // Local dev safeguard: skip if binary wasn't built yet.
+            return;
+        };
+
+        let proxy_port = pick_port();
+        let mut mgmt_port = pick_port();
+        while mgmt_port == proxy_port {
+            mgmt_port = pick_port();
+        }
+        let mut child = Command::new(bin)
+            .arg("--proxy-port")
+            .arg(proxy_port.to_string())
+            .arg("--mgmt-port")
+            .arg(mgmt_port.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn proxy");
+
+        let started = {
+            let start = Instant::now();
+            let mut up = false;
+            while start.elapsed() < Duration::from_secs(4) {
+                if port_open(mgmt_port) {
+                    up = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            up
+        };
+        assert!(started, "mgmt port did not come up");
+
+        proxy_force_cleanup_ports(proxy_port, mgmt_port).expect("cleanup");
+
+        let closed = {
+            let start = Instant::now();
+            let mut down = false;
+            while start.elapsed() < Duration::from_secs(4) {
+                if !port_open(mgmt_port) && !port_open(proxy_port) {
+                    down = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            down
+        };
+        assert!(closed, "proxy ports were not closed by cleanup");
+
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }

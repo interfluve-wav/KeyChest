@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use tauri::Emitter;
+use tauri::RunEvent;
 
 fn main() {
     tauri::Builder::default()
@@ -114,6 +115,12 @@ fn main() {
             keynest_tauri_lib::proxy::proxy_list_policy_templates,
             keynest_tauri_lib::proxy::proxy_apply_policy_template,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| match event {
+            RunEvent::Exit | RunEvent::ExitRequested { .. } => {
+                let _ = keynest_tauri_lib::proxy::proxy_force_cleanup_ports(8080, 8081);
+            }
+            _ => {}
+        });
 }
