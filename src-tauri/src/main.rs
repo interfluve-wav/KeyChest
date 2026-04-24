@@ -32,6 +32,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             // Crypto commands
             keynest_tauri_lib::crypto::pbkdf2_key_derive,
+            keynest_tauri_lib::crypto::pbkdf2_key_derive_with_iterations,
             keynest_tauri_lib::crypto::argon2_key_derive,
             keynest_tauri_lib::crypto::aes_encrypt,
             keynest_tauri_lib::crypto::aes_decrypt,

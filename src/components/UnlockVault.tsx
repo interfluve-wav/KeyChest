@@ -9,6 +9,7 @@ import {
   biometricUnlock,
   generateDataKey,
   pbkdf2KeyDerive,
+  pbkdf2KeyDeriveWithIterations,
   unwrapDataKey,
   vaultSave,
   wrapDataKey,
@@ -107,8 +108,15 @@ export function UnlockVault({ vault, onBack }: Props) {
         decrypted = await aesDecrypt(dataKeyForSession, vault.ciphertext)
       } else {
         // Legacy vault: PBKDF2-derived key decrypts ciphertext directly.
-        const legacyKey = await pbkdf2KeyDerive(passphrase, vault.salt)
-        decrypted = await aesDecrypt(legacyKey, vault.ciphertext)
+        let legacyKey: string | null = null
+        try {
+          legacyKey = await pbkdf2KeyDerive(passphrase, vault.salt)
+          decrypted = await aesDecrypt(legacyKey, vault.ciphertext)
+        } catch (e10k) {
+          // Backward compat: some vaults were created with different PBKDF2 iterations.
+          legacyKey = await pbkdf2KeyDeriveWithIterations(passphrase, vault.salt, 100000)
+          decrypted = await aesDecrypt(legacyKey, vault.ciphertext)
+        }
 
         // Auto-migrate legacy vaults to v2 format once we have the passphrase.
         // If migration fails for any reason, we still unlock using the legacy key.
@@ -131,7 +139,7 @@ export function UnlockVault({ vault, onBack }: Props) {
           dataKeyForSession = dek
         } catch (migrateErr) {
           console.warn('[Unlock] Legacy migration failed; continuing in legacy mode:', migrateErr)
-          dataKeyForSession = legacyKey
+          dataKeyForSession = legacyKey as string
         }
       }
 

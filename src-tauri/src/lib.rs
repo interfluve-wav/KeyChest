@@ -15,7 +15,8 @@ pub use biometric::{
 };
 pub use crypto::{
     aes_decrypt, aes_encrypt, argon2_key_derive, generate_data_key_cmd, generate_salt_cmd,
-    generate_uuid, pbkdf2_key_derive, unwrap_data_key_cmd, wrap_data_key_cmd,
+    generate_uuid, pbkdf2_key_derive, pbkdf2_key_derive_with_iterations, unwrap_data_key_cmd,
+    wrap_data_key_cmd,
 };
 pub use git::{
     git_get_repo_config, git_is_repo, git_remove_ssh_key, git_set_ssh_key, git_setup_deploy_key,

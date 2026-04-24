@@ -20,6 +20,11 @@ export const argon2KeyDerive = (password: string, salt: string): Promise<string>
   invoke('argon2_key_derive', { password, salt });
 export const pbkdf2KeyDerive = (password: string, salt: string): Promise<string> =>
   invoke('pbkdf2_key_derive', { password, salt });
+export const pbkdf2KeyDeriveWithIterations = (
+  password: string,
+  salt: string,
+  iterations: number
+): Promise<string> => invoke('pbkdf2_key_derive_with_iterations', { password, salt, iterations });
 export const aesEncrypt = (key: string, plaintext: string): Promise<string> =>
   invoke('aes_encrypt', { key, plaintext });
 export const aesDecrypt = (key: string, encrypted: string): Promise<string> =>

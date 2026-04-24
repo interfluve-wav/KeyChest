@@ -28,8 +28,10 @@ const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 const SALT_LEN: usize = 32;
 /// PBKDF2-HMAC-SHA256 parameters — tuned for ~100ms unlock on modern CPUs.
-/// 10k iterations gives good security while remaining responsive.
+/// Some older vaults may have been created with higher PBKDF2 iteration counts.
+/// We keep a default and support explicit iteration requests for backward compatibility.
 const PBKDF2_ITERATIONS: u32 = 10_000;
+const PBKDF2_ITERATIONS_LEGACY: u32 = 100_000;
 
 /// Argon2id parameters — tuned for desktop/mobile CPUs.
 /// 64 MiB memory, 3 iterations, 4-degree parallelism.
@@ -126,7 +128,11 @@ fn derive_key_argon2(password: &str, salt_b64: &str) -> Result<SecretKey, String
 }
 
 /// Derive a key using PBKDF2-HMAC-SHA256 (backward-compat with old vaults).
-fn derive_key_pbkdf2(password: &str, salt_b64: &str) -> Result<SecretKey, String> {
+fn derive_key_pbkdf2_with_iterations(
+    password: &str,
+    salt_b64: &str,
+    iterations: u32,
+) -> Result<SecretKey, String> {
     let salt_bytes = BASE64
         .decode(salt_b64)
         .map_err(|e| format!("Invalid salt base64: {}", e))?;
@@ -140,9 +146,13 @@ fn derive_key_pbkdf2(password: &str, salt_b64: &str) -> Result<SecretKey, String
     }
 
     let key: [u8; KEY_LEN] =
-        pbkdf2_hmac_array::<Sha256, KEY_LEN>(password.as_bytes(), &salt_bytes, PBKDF2_ITERATIONS);
+        pbkdf2_hmac_array::<Sha256, KEY_LEN>(password.as_bytes(), &salt_bytes, iterations);
 
     Ok(SecretKey(key))
+}
+
+fn derive_key_pbkdf2(password: &str, salt_b64: &str) -> Result<SecretKey, String> {
+    derive_key_pbkdf2_with_iterations(password, salt_b64, PBKDF2_ITERATIONS)
 }
 
 // ── Tauri commands ─────────────────────────────────────────────────────────────
@@ -169,6 +179,29 @@ pub async fn pbkdf2_key_derive(password: String, salt: String) -> Result<String,
     })
     .await
     .map_err(|e| format!("PBKDF2 task panicked: {}", e))?
+}
+
+/// Derive a key using PBKDF2-HMAC-SHA256 with an explicit iteration count.
+/// This exists to unlock vaults created with earlier PBKDF2 parameters.
+#[tauri::command]
+pub async fn pbkdf2_key_derive_with_iterations(
+    password: String,
+    salt: String,
+    iterations: u32,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        // Clamp to sane bounds so the UI can't accidentally request something extreme.
+        let iters = iterations.clamp(10_000, 1_000_000);
+        let key = derive_key_pbkdf2_with_iterations(&password, &salt, iters)?;
+        Ok(key.to_base64())
+    })
+    .await
+    .map_err(|e| format!("PBKDF2(iter) task panicked: {}", e))?
+}
+
+#[allow(dead_code)]
+fn _pbkdf2_legacy_iterations() -> u32 {
+    PBKDF2_ITERATIONS_LEGACY
 }
 
 /// Encrypt plaintext with the given key using AES-256-GCM.
