@@ -13,9 +13,9 @@ import {
   proxyListBindings, proxyAddBinding, proxyDeleteBinding,
   proxyAuditLog, proxyDiscover, proxyListProposals, proxyApproveProposal, proxyDenyProposal,
   proxyListAgents, proxyRotateAgentTokenWithTtl, proxyRevokeAgent, proxyListInvites, proxyCreateInvite, proxyRedeemInviteWithTtl,
-  proxyRuleTest, proxyListPolicyTemplates, proxyApplyPolicyTemplate
+  proxyRuleTest, proxyListPolicyTemplates, proxyApplyPolicyTemplate, proxyDetectTools, proxyWriteToolLauncher
 } from '../lib/api'
-import type { ProxyCredential, ProxyRule, ProxyBinding, ProxyProposal, ProxyAgent, ProxyInvite, ProxyRedeemInviteResponse, AuditEntry, DiscoverService, ProxyRuleTestResponse, ProxyPolicyTemplate, ProxyDiagnostics } from '../lib/types'
+import type { ProxyCredential, ProxyRule, ProxyBinding, ProxyProposal, ProxyAgent, ProxyInvite, ProxyRedeemInviteResponse, AuditEntry, DiscoverService, ProxyRuleTestResponse, ProxyPolicyTemplate, ProxyDiagnostics, ProxyToolDetection, ProxyToolLauncherWriteResult } from '../lib/types'
 import type { ProxyStatus } from '../lib/types'
 import { ErrorBoundary } from './ErrorBoundary'
 import { toast } from './VaultDashboard'
@@ -74,6 +74,7 @@ export function ProxyManager() {
   const [ruleTestResult, setRuleTestResult] = useState<ProxyRuleTestResponse | null>(null)
   const [policyTemplates, setPolicyTemplates] = useState<ProxyPolicyTemplate[]>([])
   const [diagnostics, setDiagnostics] = useState<ProxyDiagnostics | null>(null)
+  const [panicking, setPanicking] = useState(false)
 
   const refreshAll = useCallback(async () => {
     const status = await proxyGetStatus().catch(() => null)
@@ -242,6 +243,48 @@ export function ProxyManager() {
     }
   }
 
+  const handlePanicRevokeAll = async () => {
+    const activeAgents = proxyAgents.filter(a => a.status === 'active')
+    if (activeAgents.length === 0) {
+      toast('No active agents to revoke', 'info')
+      return
+    }
+    const ok = window.confirm(`Revoke all ${activeAgents.length} active agent tokens now?`)
+    if (!ok) return
+    setPanicking(true)
+    try {
+      const results = await Promise.allSettled(activeAgents.map(a => proxyRevokeAgent(a.id)))
+      const failed = results.filter(r => r.status === 'rejected').length
+      await refreshAll()
+      if (failed === 0) {
+        toast(`Revoked ${activeAgents.length} active agents`, 'success')
+      } else {
+        toast(`Revoked ${activeAgents.length - failed}/${activeAgents.length}; ${failed} failed`, 'error')
+      }
+    } finally {
+      setPanicking(false)
+    }
+  }
+
+  const nowMs = Date.now()
+  const hasValidToken = proxyAgents.some(a => a.status === 'active' && (!a.expires_at || new Date(a.expires_at).getTime() > nowMs))
+  const hasAllowRules = proxyRules.some(r => r.action === 'allow')
+  const lastBroker = proxyAuditEntries
+    .slice()
+    .reverse()
+    .find(e => e.action === 'broker' && e.status_code >= 200 && e.status_code < 400)
+  const healthLevel: 'green' | 'yellow' | 'red' = !proxyStatus?.running
+    ? 'red'
+    : (hasValidToken && hasAllowRules && Boolean(lastBroker))
+      ? 'green'
+      : 'yellow'
+  const healthLabel = healthLevel === 'green' ? 'Healthy' : healthLevel === 'yellow' ? 'Needs Attention' : 'Offline'
+  const healthTone = healthLevel === 'green'
+    ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300'
+    : healthLevel === 'yellow'
+      ? 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300'
+      : 'border-red-300 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300'
+
   return (
     <ErrorBoundary>
       <div className="space-y-4">
@@ -324,9 +367,23 @@ export function ProxyManager() {
                 <div className="text-sm text-emerald-800 dark:text-emerald-200">
                   <p className="font-medium">Proxy Active</p>
                   <p className="mt-1 text-emerald-700 dark:text-emerald-300">
-                    Configure your agent with <code className="bg-emerald-100 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded text-xs font-mono">HTTPS_PROXY=http://127.0.0.1:{proxyStatus.proxy_port}</code>, <code className="bg-emerald-100 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded text-xs font-mono">X-Vault-ID: {currentVault?.id || '&lt;vault-id&gt;'}</code>, <code className="bg-emerald-100 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded text-xs font-mono">X-Agent-ID</code>, and <code className="bg-emerald-100 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded text-xs font-mono">X-Agent-Token</code>. Credentials are brokered at the proxy — agents never touch raw keys.
+                    Configure your agent with <code className="bg-emerald-100 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded text-xs font-mono">HTTPS_PROXY=http://127.0.0.1:{proxyStatus.proxy_port}</code> and <code className="bg-emerald-100 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded text-xs font-mono">Proxy-Authorization: Bearer &lt;agent-token&gt;</code>. Legacy <code className="bg-emerald-100 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded text-xs font-mono">X-*</code> headers still work as fallback.
                   </p>
                 </div>
+              </div>
+            </div>
+
+            <div className={`rounded-xl border p-3 ${healthTone}`}>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-semibold">Live Health: {healthLabel}</p>
+                <span className="text-xs">
+                  {lastBroker ? `Last success: ${new Date(lastBroker.timestamp).toLocaleTimeString()}` : 'No successful brokered call yet'}
+                </span>
+              </div>
+              <div className="mt-2 grid gap-2 text-xs md:grid-cols-3">
+                <span>Proxy: {proxyStatus?.running ? 'up' : 'down'}</span>
+                <span>Token: {hasValidToken ? 'valid active token' : 'missing/expired'}</span>
+                <span>Rules: {hasAllowRules ? 'allow rules present' : 'no allow rules'}</span>
               </div>
             </div>
 
@@ -412,7 +469,7 @@ export function ProxyManager() {
                 )}
                 {activeTab === 'bindings' && <BindingsList bindings={proxyBindings} credentials={proxyCredentials} rules={proxyRules} onDelete={async (id) => { try { await proxyDeleteBinding(id); await refreshAll(); toast('Binding deleted', 'info') } catch (e) { toast(`Delete failed: ${formatError(e)}`, 'error') } }} />}
                 {activeTab === 'proposals' && <ProposalsList proposals={proxyProposals} onApprove={async (id) => { try { await proxyApproveProposal(id); await refreshAll(); toast('Proposal approved', 'success') } catch (e) { toast(`Approve failed: ${formatError(e)}`, 'error') } }} onDeny={async (id) => { try { await proxyDenyProposal(id); await refreshAll(); toast('Proposal denied', 'info') } catch (e) { toast(`Deny failed: ${formatError(e)}`, 'error') } }} />}
-                {activeTab === 'agents' && currentVault && <AgentsList proxyPort={proxyStatus.proxy_port} vaultId={currentVault.id} agents={proxyAgents} invites={proxyInvites} onCreateInvite={async (name) => { try { const invite = await proxyCreateInvite(currentVault.id, name); await refreshAll(); toast('Invite created', 'success'); return invite } catch (e) { toast(`Invite failed: ${formatError(e)}`, 'error'); throw e } }} onRedeem={async (code, name, ttl) => { try { const redeemed = await proxyRedeemInviteWithTtl(code, ttl, name); await refreshAll(); toast('Invite redeemed', 'success'); return redeemed } catch (e) { toast(`Redeem failed: ${formatError(e)}`, 'error'); throw e } }} onRotate={async (id, ttl) => { try { const rotated = await proxyRotateAgentTokenWithTtl(id, ttl); await refreshAll(); toast('Token rotated', 'success'); return rotated } catch (e) { toast(`Rotate failed: ${formatError(e)}`, 'error'); throw e } }} onRevoke={async (id) => { try { await proxyRevokeAgent(id); await refreshAll(); toast('Agent revoked', 'info') } catch (e) { toast(`Revoke failed: ${formatError(e)}`, 'error') } }} />}
+                {activeTab === 'agents' && currentVault && <AgentsList proxyPort={proxyStatus.proxy_port} vaultId={currentVault.id} agents={proxyAgents} invites={proxyInvites} panicking={panicking} onPanicRevokeAll={handlePanicRevokeAll} onCreateInvite={async (name) => { try { const invite = await proxyCreateInvite(currentVault.id, name); await refreshAll(); toast('Invite created', 'success'); return invite } catch (e) { toast(`Invite failed: ${formatError(e)}`, 'error'); throw e } }} onRedeem={async (code, name, ttl) => { try { const redeemed = await proxyRedeemInviteWithTtl(code, ttl, name); await refreshAll(); toast('Invite redeemed', 'success'); return redeemed } catch (e) { toast(`Redeem failed: ${formatError(e)}`, 'error'); throw e } }} onRotate={async (id, ttl) => { try { const rotated = await proxyRotateAgentTokenWithTtl(id, ttl); await refreshAll(); toast('Token rotated', 'success'); return rotated } catch (e) { toast(`Rotate failed: ${formatError(e)}`, 'error'); throw e } }} onRevoke={async (id) => { try { await proxyRevokeAgent(id); await refreshAll(); toast('Agent revoked', 'info') } catch (e) { toast(`Revoke failed: ${formatError(e)}`, 'error') } }} />}
                 {activeTab === 'audit' && <AuditLog entries={proxyAuditEntries} />}
               </section>
             </div>
@@ -959,11 +1016,13 @@ function ProposalsList({ proposals, onApprove, onDeny }: {
   )
 }
 
-function AgentsList({ proxyPort, vaultId, agents, invites, onCreateInvite, onRedeem, onRotate, onRevoke }: {
+function AgentsList({ proxyPort, vaultId, agents, invites, panicking, onPanicRevokeAll, onCreateInvite, onRedeem, onRotate, onRevoke }: {
   proxyPort: number
   vaultId: string
   agents: ProxyAgent[]
   invites: ProxyInvite[]
+  panicking: boolean
+  onPanicRevokeAll: () => Promise<void>
   onCreateInvite: (name: string) => Promise<ProxyInvite>
   onRedeem: (code: string, name: string | undefined, ttl: '15m' | '1h' | '24h') => Promise<ProxyRedeemInviteResponse>
   onRotate: (id: string, ttl: '15m' | '1h' | '24h') => Promise<ProxyAgent>
@@ -982,24 +1041,48 @@ function AgentsList({ proxyPort, vaultId, agents, invites, onCreateInvite, onRed
   const [toolPreset, setToolPreset] = useState<'claude_code' | 'hermes' | 'openclaw' | 'cursor'>('claude_code')
   const [tokenTtl, setTokenTtl] = useState<'15m' | '1h' | '24h'>('1h')
   const [nowMs, setNowMs] = useState(Date.now())
+  const [detectedTools, setDetectedTools] = useState<ProxyToolDetection[]>([])
+  const [detectingTools, setDetectingTools] = useState(false)
+  const [writingLauncher, setWritingLauncher] = useState(false)
+  const [lastLauncher, setLastLauncher] = useState<ProxyToolLauncherWriteResult | null>(null)
 
   useEffect(() => {
     const id = window.setInterval(() => setNowMs(Date.now()), 1000)
     return () => window.clearInterval(id)
   }, [])
 
+  useEffect(() => {
+    const run = async () => {
+      setDetectingTools(true)
+      try {
+        const tools = await proxyDetectTools()
+        setDetectedTools(tools)
+      } catch {
+        setDetectedTools([])
+      } finally {
+        setDetectingTools(false)
+      }
+    }
+    void run()
+  }, [])
+
   const buildConfigSnippet = (preset: 'claude_code' | 'hermes' | 'openclaw' | 'cursor') => {
     if (!issuedToken || !issuedAgentId) return ''
     const baseEnv = [
       `HTTPS_PROXY=http://127.0.0.1:${proxyPort}`,
+      `HTTP_PROXY=http://127.0.0.1:${proxyPort}`,
+      `ALL_PROXY=http://127.0.0.1:${proxyPort}`,
+      'NO_PROXY=127.0.0.1,localhost',
+      `PROXY_AUTHORIZATION=Bearer ${issuedToken}`,
       `X_VAULT_ID=${vaultId}`,
       `X_AGENT_ID=${issuedAgentId}`,
       `X_AGENT_TOKEN=${issuedToken}`,
     ]
     const headers = [
-      `X-Vault-ID: ${vaultId}`,
-      `X-Agent-ID: ${issuedAgentId}`,
-      `X-Agent-Token: ${issuedToken}`,
+      `Proxy-Authorization: Bearer ${issuedToken}`,
+      '(fallback) X-Vault-ID: ' + vaultId,
+      '(fallback) X-Agent-ID: ' + issuedAgentId,
+      '(fallback) X-Agent-Token: ' + issuedToken,
     ]
 
     switch (preset) {
@@ -1053,6 +1136,10 @@ function AgentsList({ proxyPort, vaultId, agents, invites, onCreateInvite, onRed
     if (!issuedToken || !issuedAgentId) return ''
     const exports = [
       `export HTTPS_PROXY=http://127.0.0.1:${proxyPort}`,
+      `export HTTP_PROXY=http://127.0.0.1:${proxyPort}`,
+      `export ALL_PROXY=http://127.0.0.1:${proxyPort}`,
+      'export NO_PROXY=127.0.0.1,localhost',
+      `export PROXY_AUTHORIZATION="Bearer ${issuedToken}"`,
       `export X_VAULT_ID=${vaultId}`,
       `export X_AGENT_ID=${issuedAgentId}`,
       `export X_AGENT_TOKEN=${issuedToken}`,
@@ -1153,8 +1240,87 @@ function AgentsList({ proxyPort, vaultId, agents, invites, onCreateInvite, onRed
     toast('Config snippet downloaded', 'success')
   }
 
+  const writeLauncher = async () => {
+    if (!issuedToken || !issuedAgentId) return
+    setWritingLauncher(true)
+    try {
+      const result = await proxyWriteToolLauncher(toolPreset, vaultId, issuedAgentId, issuedToken, proxyPort)
+      setLastLauncher(result)
+      toast(`Launcher created: ${result.script_path}`, 'success')
+    } catch (err) {
+      toast(`Failed to write launcher: ${formatError(err)}`, 'error')
+    } finally {
+      setWritingLauncher(false)
+    }
+  }
+
   return (
     <div className="space-y-4">
+      <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-800 p-4">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h4 className="text-sm font-medium text-slate-700 dark:text-slate-300">Connect My Tool (One-click)</h4>
+          <button
+            type="button"
+            onClick={async () => {
+              setDetectingTools(true)
+              try {
+                setDetectedTools(await proxyDetectTools())
+              } finally {
+                setDetectingTools(false)
+              }
+            }}
+            className="px-2.5 py-1 text-xs rounded border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300"
+          >
+            {detectingTools ? 'Detecting...' : 'Re-detect'}
+          </button>
+        </div>
+        <div className="mb-3 grid gap-2 sm:grid-cols-2">
+          {detectedTools.map(tool => (
+            <div key={tool.id} className="rounded border border-slate-200 dark:border-slate-700 px-2.5 py-2 text-xs">
+              <p className="font-medium text-slate-800 dark:text-slate-100">{tool.label}</p>
+              <p className="text-slate-500 dark:text-slate-400">command: {tool.command}</p>
+              <p className={tool.detected ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>
+                {tool.detected ? 'detected' : 'not found'}
+              </p>
+            </div>
+          ))}
+          {!detectedTools.length && <p className="text-xs text-slate-500 dark:text-slate-400">No detection data yet.</p>}
+        </div>
+        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+          Writes a local launcher script + env file in app data (does not modify external tool configs).
+        </p>
+        <div className="mt-2 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={writeLauncher}
+            disabled={!issuedToken || !issuedAgentId || writingLauncher}
+            className="px-3 py-1.5 text-xs rounded bg-blue-500 hover:bg-blue-400 disabled:bg-slate-300 dark:disabled:bg-slate-700 text-white font-medium transition-all"
+          >
+            {writingLauncher ? 'Writing Launcher...' : 'Write Launcher Script'}
+          </button>
+          {lastLauncher && (
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 font-mono truncate">
+              {lastLauncher.script_path}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="bg-red-50 dark:bg-red-950/20 rounded-xl border border-red-200 dark:border-red-800 p-4">
+        <h4 className="text-sm font-medium text-red-700 dark:text-red-300 mb-2">Panic Button</h4>
+        <p className="text-xs text-red-700/80 dark:text-red-300/80 mb-2">
+          Instantly revokes every active agent token for this vault.
+        </p>
+        <button
+          type="button"
+          onClick={() => { void onPanicRevokeAll() }}
+          disabled={panicking}
+          className="px-3 py-1.5 text-xs rounded bg-red-600 hover:bg-red-500 disabled:bg-slate-300 dark:disabled:bg-slate-700 text-white font-medium transition-all"
+        >
+          {panicking ? 'Revoking All...' : 'Revoke All Active Agents'}
+        </button>
+      </div>
+
       <form onSubmit={createInvite} className="bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-800 p-4">
         <h4 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">Create Invite</h4>
         <div className="flex gap-2">
@@ -1394,6 +1560,8 @@ function DiscoverTab({ data, onRefresh }: { data: { services: DiscoverService[];
         </h4>
         <div className="space-y-2 text-xs text-slate-600 dark:text-slate-400 font-mono">
           <p><span className="text-slate-400">HTTPS_PROXY</span>=http://127.0.0.1:8080</p>
+          <p><span className="text-slate-400">Proxy-Authorization</span>: Bearer &lt;agent-token&gt;</p>
+          <p className="text-slate-500 dark:text-slate-500">Fallback custom headers:</p>
           <p><span className="text-slate-400">X-Vault-ID</span>: &lt;your-vault-id&gt;</p>
           <p><span className="text-slate-400">X-Agent-ID</span>: &lt;agent-id&gt;</p>
           <p><span className="text-slate-400">X-Agent-Token</span>: &lt;agent-token&gt;</p>

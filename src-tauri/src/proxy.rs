@@ -326,11 +326,7 @@ fn find_proxy_binary(app: &AppHandle) -> Result<PathBuf, String> {
         if let Some(exe_parent) = exe.parent() {
             candidates.push(exe_parent.join(binary_name));
             candidates.push(exe_parent.join("../Resources").join(binary_name));
-            candidates.push(
-                exe_parent
-                    .join("../Resources/resources")
-                    .join(binary_name),
-            );
+            candidates.push(exe_parent.join("../Resources/resources").join(binary_name));
         }
     }
 
@@ -1203,6 +1199,122 @@ pub struct ProxyPolicyTemplate {
     pub name: String,
     pub description: String,
     pub rules: Vec<ProxyRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyToolDetection {
+    pub id: String,
+    pub label: String,
+    pub command: String,
+    pub detected: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyToolLauncherWriteResult {
+    pub tool_id: String,
+    pub script_path: String,
+    pub env_path: String,
+}
+
+fn command_exists(command: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("where")
+            .arg(command)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new("which")
+            .arg(command)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+}
+
+#[tauri::command]
+pub async fn proxy_detect_tools() -> Result<Vec<ProxyToolDetection>, String> {
+    let tools = vec![
+        ("claude_code", "Claude Code", "claude"),
+        ("cursor", "Cursor", "cursor"),
+        ("hermes", "Hermes", "hermes"),
+        ("openclaw", "OpenClaw", "openclaw"),
+    ];
+    Ok(tools
+        .into_iter()
+        .map(|(id, label, command)| ProxyToolDetection {
+            id: id.to_string(),
+            label: label.to_string(),
+            command: command.to_string(),
+            detected: command_exists(command),
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn proxy_write_tool_launcher(
+    app: AppHandle,
+    tool_id: String,
+    vault_id: String,
+    agent_id: String,
+    agent_token: String,
+    proxy_port: Option<u16>,
+) -> Result<ProxyToolLauncherWriteResult, String> {
+    let proxy_port = proxy_port.unwrap_or(8080);
+    let launcher_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?
+        .join("agent-launchers");
+    std::fs::create_dir_all(&launcher_dir)
+        .map_err(|e| format!("Failed to create launcher dir: {}", e))?;
+
+    let (tool_label, launch_command) = match tool_id.as_str() {
+        "claude_code" => ("Claude Code", "claude"),
+        "cursor" => ("Cursor", "cursor"),
+        "hermes" => ("Hermes", "hermes"),
+        "openclaw" => ("OpenClaw", "openclaw"),
+        _ => return Err(format!("Unsupported tool: {}", tool_id)),
+    };
+
+    let env_path = launcher_dir.join(format!("{}-{}.env", tool_id, agent_id));
+    let script_path = launcher_dir.join(format!("launch-{}-{}.sh", tool_id, agent_id));
+    let env_body = format!(
+        "HTTP_PROXY=http://127.0.0.1:{p}\nHTTPS_PROXY=http://127.0.0.1:{p}\nALL_PROXY=http://127.0.0.1:{p}\nNO_PROXY=127.0.0.1,localhost\nPROXY_AUTHORIZATION=Bearer {token}\nX_VAULT_ID={vault}\nX_AGENT_ID={agent}\nX_AGENT_TOKEN={token}\n",
+        p = proxy_port,
+        token = agent_token,
+        vault = vault_id,
+        agent = agent_id
+    );
+    std::fs::write(&env_path, env_body).map_err(|e| format!("Failed to write env file: {}", e))?;
+
+    let script_body = format!(
+        "#!/usr/bin/env bash\nset -euo pipefail\nSCRIPT_DIR=\"$(cd \"$(dirname \"${{BASH_SOURCE[0]}}\")\" && pwd)\"\nset -a\nsource \"$SCRIPT_DIR/{env_name}\"\nset +a\necho \"Launching {label} with KeyNest proxy env\"\nexec {cmd} \"$@\"\n",
+        env_name = env_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("launcher.env"),
+        label = tool_label,
+        cmd = launch_command
+    );
+    std::fs::write(&script_path, script_body)
+        .map_err(|e| format!("Failed to write launcher script: {}", e))?;
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o700));
+        let _ = std::fs::set_permissions(&env_path, std::fs::Permissions::from_mode(0o600));
+    }
+
+    Ok(ProxyToolLauncherWriteResult {
+        tool_id,
+        script_path: script_path.display().to_string(),
+        env_path: env_path.display().to_string(),
+    })
 }
 
 #[tauri::command]

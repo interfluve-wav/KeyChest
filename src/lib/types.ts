@@ -225,6 +225,19 @@ export interface ProxyPolicyTemplate {
   rules: ProxyRule[]
 }
 
+export interface ProxyToolDetection {
+  id: 'claude_code' | 'cursor' | 'hermes' | 'openclaw'
+  label: string
+  command: string
+  detected: boolean
+}
+
+export interface ProxyToolLauncherWriteResult {
+  tool_id: string
+  script_path: string
+  env_path: string
+}
+
 export function emptyVaultData(): VaultData {
   return { keys: [], api_keys: [], notes: [], pgp_keys: [] }
 }

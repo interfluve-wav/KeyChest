@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Vault, VaultData, ImportedKey, Settings, ProxyCredential, ProxyRule, ProxyBinding, ProxyProposal, ProxyAgent, ProxyInvite, ProxyRedeemInviteResponse, AuditEntry, ProxyStatus, ProxyDiagnostics, DiscoverResponse, ProxyRuleTestRequest, ProxyRuleTestResponse, ProxyPolicyTemplate } from './types';
+import type { Vault, VaultData, ImportedKey, Settings, ProxyCredential, ProxyRule, ProxyBinding, ProxyProposal, ProxyAgent, ProxyInvite, ProxyRedeemInviteResponse, AuditEntry, ProxyStatus, ProxyDiagnostics, DiscoverResponse, ProxyRuleTestRequest, ProxyRuleTestResponse, ProxyPolicyTemplate, ProxyToolDetection, ProxyToolLauncherWriteResult } from './types';
 
 // Vault management
 export const vaultList = (): Promise<Vault[]> => invoke('vault_list');
@@ -201,3 +201,19 @@ export const proxyListPolicyTemplates = (mgmtPort?: number): Promise<ProxyPolicy
   invoke('proxy_list_policy_templates', { mgmtPort: mgmtPort ?? null });
 export const proxyApplyPolicyTemplate = (vaultId: string, templateId: string, mgmtPort?: number): Promise<ProxyRule[]> =>
   invoke('proxy_apply_policy_template', { vaultId, templateId, mgmtPort: mgmtPort ?? null });
+export const proxyDetectTools = (): Promise<ProxyToolDetection[]> =>
+  invoke('proxy_detect_tools');
+export const proxyWriteToolLauncher = (
+  toolId: 'claude_code' | 'cursor' | 'hermes' | 'openclaw',
+  vaultId: string,
+  agentId: string,
+  agentToken: string,
+  proxyPort?: number
+): Promise<ProxyToolLauncherWriteResult> =>
+  invoke('proxy_write_tool_launcher', {
+    toolId,
+    vaultId,
+    agentId,
+    agentToken,
+    proxyPort: proxyPort ?? null,
+  });

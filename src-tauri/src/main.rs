@@ -116,6 +116,8 @@ fn main() {
             keynest_tauri_lib::proxy::proxy_rule_test,
             keynest_tauri_lib::proxy::proxy_list_policy_templates,
             keynest_tauri_lib::proxy::proxy_apply_policy_template,
+            keynest_tauri_lib::proxy::proxy_detect_tools,
+            keynest_tauri_lib::proxy::proxy_write_tool_launcher,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

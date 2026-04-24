@@ -493,7 +493,8 @@ mod tests {
     fn test_unwrap_data_key_fails_with_wrong_key() {
         let salt = generate_salt();
         let kek = derive_key_argon2(TEST_PASSWORD, &salt).expect("kek derivation failed");
-        let wrong_kek = derive_key_argon2("wrong-password", &salt).expect("wrong kek derivation failed");
+        let wrong_kek =
+            derive_key_argon2("wrong-password", &salt).expect("wrong kek derivation failed");
         let dek = generate_data_key().expect("data key generation failed");
 
         let wrapped = wrap_data_key(&dek, kek.as_bytes()).expect("wrap should succeed");
