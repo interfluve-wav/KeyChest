@@ -1,6 +1,13 @@
 # KeyNest (SSH Vault Tauri)
 
+[![CI](https://github.com/ssh-vault/ssh-vault/actions/workflows/ci.yml/badge.svg)](https://github.com/ssh-vault/ssh-vault/actions/workflows/ci.yml)
+[![Release](https://github.com/ssh-vault/ssh-vault/actions/workflows/release.yml/badge.svg)](https://github.com/ssh-vault/ssh-vault/actions/workflows/release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/ssh-vault/ssh-vault)](https://github.com/ssh-vault/ssh-vault/releases)
+[![License](https://img.shields.io/github/license/ssh-vault/ssh-vault)](https://github.com/ssh-vault/ssh-vault/blob/master/LICENSE)
+
 KeyNest is a secure, native macOS vault and agent-credential broker for SSH keys, API credentials, and PGP keys. It combines local encrypted storage with **Agent Chest**, a policy-aware HTTP/HTTPS proxy that brokers credentials to AI agents without exposing raw keys.
+
+**Discoverability tags:** #KeyNest #AgentChest #Tauri #Rust #Go #SSH #APIKeys #AIAgents #DevTools
 
 ## What This App Does
 
@@ -37,6 +44,19 @@ AI agents shouldn't hold raw API keys. Agent Chest runs a local HTTPS proxy that
 
 See [AGENT_CHEST.md](./AGENT_CHEST.md) for full documentation.
 See [AGENT_ONBOARDING.md](./AGENT_ONBOARDING.md) for a no-code agent setup flow.
+
+## Releases and Tags
+
+- Merge PRs into `master` with clear labels (`proxy`, `security`, `ui`, `docs`, `ci`).
+- `Release Drafter` continuously updates the next release notes draft.
+- Cut a release by creating a semantic tag like `v0.2.1` and pushing it:
+
+```bash
+git tag v0.2.1
+git push origin v0.2.1
+```
+
+- The `Release` workflow publishes GitHub release notes and attaches generated checksums.
 
 ### Agent Onboarding (No Code)
 

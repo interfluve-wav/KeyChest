@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Proxy server** (`agent-chest-proxy`) — standalone Go binary that acts as an HTTPS_PROXY for AI agents, brokering credentials at the proxy layer so agents never touch raw API keys
   - HTTP forward proxy with credential injection (Bearer, API key header, Basic auth)
-  - HTTPS CONNECT proxy with automatic upgrade to forward-proxy when credentials match, ensuring auth headers are injected into TLS connections
+  - HTTPS CONNECT tunneling for standard proxy compatibility; explicit `/proxy/{host}/{path}` endpoint remains the credential-injection path for HTTPS APIs
   - Firewall-like access rules: allow/deny by host pattern, path pattern, and HTTP method
   - Multi-vault RBAC: bind credentials and rules to specific vault IDs to scope agent blast radius
   - Full audit trail: every request logged with timestamp, agent ID, vault ID, method, target, action, status code, credential ID, matched rule, source IP, user agent, and duration
@@ -29,6 +29,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New app setting `strict_no_file_write_mode` to block launcher script/env generation by default
   - Backend-enforced guard in `proxy_write_tool_launcher` so file writes are denied even if called directly
   - Proxy UI now reflects strict mode and disables launcher file generation with clear messaging
+- **GitHub release hygiene + discoverability baseline**
+  - Added CI workflow: frontend build, Rust check/tests, Go tests, and proxy integration tests on macOS
+  - Added Release Drafter workflow + config to keep release notes curated on `master`
+  - Added tag-based GitHub Release workflow on `v*` tags
+  - Added PR template with verification and changelog checks
+  - Added README badges, release process docs, and discoverability hashtags
+  - Added package/crate metadata (`repository`, `homepage`, `keywords`, `license`) for better indexing
+
+### Fixed
+
+- **CONNECT runtime reliability**
+  - Removed invalid CONNECT replay behavior that caused upstream `400 Bad Request` responses
+  - CONNECT now behaves as a true tunnel; integration tests validate tunnel behavior directly
+- **Proxy stop UI health staleness**
+  - Clearing diagnostics/discover state and refreshing after stop now prevents stale "Reachable/Listening" cards after shutdown
 
 - **Rust backend integration** (`src-tauri/src/proxy.rs`)
   - `proxy_start` — spawns the Go proxy binary as a child process

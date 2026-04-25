@@ -157,6 +157,11 @@ export function ProxyManager() {
         await sleep(150)
       }
 
+      // Clear live diagnostics first to avoid stale "listening/reachable" cards
+      // from the previous running state while shutdown settles.
+      setDiagnostics(null)
+      setDiscoverData(null)
+
       setProxyStatus(null)
       setProxyCredentials([])
       setProxyRules([])
@@ -165,6 +170,7 @@ export function ProxyManager() {
       setProxyAgents([])
       setProxyInvites([])
       setProxyAuditEntries([])
+      await refreshAll()
       toast('Proxy stopped', 'info')
     } catch (e: any) {
       console.error('Failed to stop proxy:', e)

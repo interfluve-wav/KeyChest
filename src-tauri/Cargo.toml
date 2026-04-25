@@ -5,6 +5,11 @@ description = "KeyNest — secure SSH key and API key manager"
 authors = ["you"]
 edition = "2021"
 rust-version = "1.70"
+license = "MIT"
+repository = "https://github.com/ssh-vault/ssh-vault"
+homepage = "https://github.com/ssh-vault/ssh-vault"
+keywords = ["keynest", "tauri", "ssh", "security", "proxy"]
+categories = ["cryptography", "command-line-utilities"]
 
 [lib]
 name = "keynest_tauri_lib"

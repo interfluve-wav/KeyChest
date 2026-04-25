@@ -315,7 +315,8 @@ if [ -z "$RESP" ]; then
     echo -e "  ${YELLOW}⊘${NC} HTTPS CONNECT proxy test skipped (no internet or httpbin unreachable)"
     SKIP=$((SKIP + 1))
 else
-    assert_contains "bearer token injected into request" "$RESP" "test-bearer-token-123"
+    assert_contains "CONNECT tunnel returns httpbin payload" "$RESP" "\"headers\""
+    assert_not_contains "CONNECT path does not leak auth errors" "$RESP" "missing X-Agent-ID"
 fi
 echo ""
 

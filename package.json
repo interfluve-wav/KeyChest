@@ -2,6 +2,27 @@
   "name": "ssh-vault-tauri",
   "private": true,
   "version": "0.2.0",
+  "description": "KeyNest: secure local key vault + Agent Chest credential proxy for AI agents",
+  "license": "MIT",
+  "homepage": "https://github.com/ssh-vault/ssh-vault",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ssh-vault/ssh-vault.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ssh-vault/ssh-vault/issues"
+  },
+  "keywords": [
+    "keynest",
+    "ssh",
+    "api-keys",
+    "tauri",
+    "rust",
+    "agent-proxy",
+    "credential-broker",
+    "agent-chest",
+    "security"
+  ],
   "type": "module",
   "scripts": {
     "dev": "vite",
